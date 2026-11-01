@@ -144,34 +144,27 @@ export function apply(ctx) {
             if (!outbox) throw new Error("This connection has no outbox");
             if (!outbox.supports(30078)) throw new Error("Outbox does not support kind 30078");
             const challenge = `kybernesis-spike-${crypto.randomUUID()}`;
+            // With a recovery key the outbox keeps the operation, signed copy
+            // included, after the relay confirms it, until we acknowledge it.
+            const id = outbox.send(
+              { kind: 30078, content: challenge, tags: [["d", "kybernesis-signin"]] },
+              { key: `kybernesis-signin:${challenge}`, value: "1" },
+            );
+            progress(`Sent ${id}, waiting for the signed copy…`);
             let signed;
-            const stop = outbox.subscribe(() => {
-              for (const item of outbox.snapshot()) {
-                if (item.signed && item.signed.content === challenge) signed = item.signed;
-              }
-            });
-            let id;
+            let last;
+            for (let i = 0; i < 60 && !signed; i++) {
+              last = outbox.snapshot().find((item) => item.event.id === id);
+              if (last && last.signed) signed = last.signed;
+              else await sleep(250);
+            }
             try {
-              id = outbox.send({
-                kind: 30078,
-                content: challenge,
-                tags: [["d", "kybernesis-signin"]],
-              });
-              progress(`Sent ${id}, waiting for the signed copy…`);
-              for (let i = 0; i < 40 && !signed; i++) {
-                await sleep(250);
-                for (const item of outbox.snapshot()) {
-                  if (item.signed && item.signed.content === challenge) signed = item.signed;
-                }
-              }
-            } finally {
-              stop();
+              await outbox.acknowledge(id);
+            } catch (error) {
+              progress(`Acknowledge failed: ${message(error)}`);
             }
-            let fromRelay;
-            if (!signed) {
-              const found = await session.read([{ ids: [id], kinds: [30078], limit: 1 }]);
-              fromRelay = found && found[0];
-            }
+            const fromRelay = undefined;
+            if (!signed) return { id, result: "No signed copy in the outbox", lastState: last && { delivery: last.delivery, error: last.error } };
             const event = signed || fromRelay;
             if (!event) return { id, result: "No signed copy came back from the outbox or the relay" };
             return {
