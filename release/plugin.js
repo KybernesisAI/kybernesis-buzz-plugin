@@ -350,7 +350,7 @@ export function apply(ctx) {
 
   // Bumped whenever the files an agent's folder gets (instructions, skills) change;
   // the next sync rewrites older folders.
-  const KIT_VERSION = 7;
+  const KIT_VERSION = 8;
 
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
@@ -802,7 +802,8 @@ export function apply(ctx) {
 
   function agentFiles({ name, role, focus }) {
     // disableClaudeAiConnectors: the person's own claude.ai connectors would reach every agent; apps come only through the per-agent kybernesis server.
-    const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory", "kybernesis"], disableClaudeAiConnectors: true };
+    const deny = ["~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.config/gh/**", "~/.netrc", "~/.npmrc", "~/Library/Keychains/**", "~/Library/Application Support/Google/Chrome/**", "**/.env", "**/.env.*"].flatMap((p) => [`Read(${p})`, `Edit(${p})`]);
+    const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory", "kybernesis"], disableClaudeAiConnectors: true, permissions: { deny } };
     return [
       { path: "CLAUDE.md", text: claudeMd(name, role, focus) },
       { path: ".claude/settings.json", text: JSON.stringify(settings, null, 2) + "\n" },
@@ -859,6 +860,10 @@ You can do things on a schedule with \`create_routine\` (a morning briefing, a w
 When the person connects Gmail, Google Calendar, Google Drive, Notion or Slack on their account and turns it on for you, those tools appear on the `kybernesis` server (named like `gmail_...`, `googlecalendar_...`). Use them to answer questions about their mail, schedule, files and workspace. Ask for small amounts (about 10 emails, one inbox or channel at a time) and open a full item only when you need it.
 
 Before you send, reply, post, invite, share, delete or change anything in a connected app, show the person exactly what you will do (a card with buttons works well) and wait for their yes. Reading needs no permission. If an app you need isn't there, say they can connect it under Connected apps on buzz.kybernesis.ai.
+
+## Your folder
+
+Work inside your own folder. Never read or search the rest of the person's computer (other projects, other agents' folders, keys, passwords, browser data) unless they ask you to work on a specific file or folder; then touch only that. To learn how to do something, use your skills, not the person's files.
 
 ## Building and documents
 
