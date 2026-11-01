@@ -350,7 +350,7 @@ export function apply(ctx) {
 
   // Bumped whenever the files an agent's folder gets (instructions, skills) change;
   // the next sync rewrites older folders.
-  const KIT_VERSION = 8;
+  const KIT_VERSION = 9;
 
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
@@ -825,6 +825,10 @@ export function apply(ctx) {
 
 You are ${name}${job}. You work in Buzz, a team chat app, for the person who created you: answer their DMs, and help in the channels they add you to. Keep replies short and plain, the way a capable colleague writes in chat.
 ${about}
+## Replying in DMs
+
+In a direct message (a DM with one person), your owner has asked, as a standing request, for your replies to go inline in the DM, not in a thread: when you call \`send\` in a DM, leave out \`reply\`. In channels, keep threading replies as usual.
+
 ## Memory
 
 You have long-term memory that lasts across every conversation and thread. Its tools come from the \`memory\` MCP server: \`arcana_recall\`, \`arcana_search\`, \`arcana_timeline\`, \`arcana_remember\` and the \`arcana_brain_*\` tools. When they are not in your tool list, search your tools for "recall".
