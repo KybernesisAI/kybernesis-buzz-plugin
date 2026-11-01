@@ -57,11 +57,11 @@ const CSS = `
 .kyb .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); }
 .kyb .card { background:var(--surface); border:1px solid var(--line); padding:18px; display:flex; flex-direction:column; gap:12px; }
 .kyb .card:hover { border-color:var(--line2); }
-.kyb .card { position:relative; }
-.kyb .card .who { padding-right:110px; }
-.kyb .card-acts { position:absolute; top:14px; right:16px; display:flex; gap:14px; align-items:center; }
-.kyb .card-acts .del { color:var(--red); opacity:0; pointer-events:none; transition:opacity .12s; }
-.kyb .card:hover .card-acts .del, .kyb .card-acts .del:focus-visible { opacity:1; pointer-events:auto; }
+.kyb .card .who { align-items:flex-start; }
+.kyb .card .who .avatar { align-self:center; }
+.kyb .card-acts { flex:none; display:flex; gap:16px; align-items:center; padding-top:2px; }
+.kyb .card-acts .del { display:none; color:var(--red); }
+.kyb .card:hover .card-acts .del, .kyb .card-acts .del:focus-visible { display:inline-flex; }
 .kyb .card-acts .del:hover { color:var(--red); text-decoration:underline; }
 .kyb .who { display:flex; gap:12px; align-items:center; min-width:0; }
 .kyb .avatar { width:46px; height:46px; flex:none; border:1px solid var(--line); background:var(--sunk); object-fit:cover; display:block; }
@@ -791,15 +791,15 @@ export function apply(ctx) {
       { className: "card" },
       h(
         "div",
-        { className: "card-acts" },
-        h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗"),
-        h("button", { type: "button", className: "link del", onClick: () => setAsking(true), disabled: asking }, "Delete"),
-      ),
-      h(
-        "div",
         { className: "who" },
         h("img", { className: "avatar", src: agent.picture || AVATAR, alt: "" }),
-        h("div", { style: { minWidth: 0 } }, h("h2", null, agent.name), h("div", { className: "role" }, agent.role || "Kybernesis agent")),
+        h("div", { style: { minWidth: 0, flex: 1 } }, h("h2", null, agent.name), h("div", { className: "role" }, agent.role || "Kybernesis agent")),
+        h(
+          "div",
+          { className: "card-acts" },
+          h("button", { type: "button", className: "link del", onClick: () => setAsking(true), disabled: asking }, "Delete"),
+          h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗"),
+        ),
       ),
       focus ? h("p", { className: "focus" }, focus) : null,
       h(
