@@ -497,15 +497,19 @@ export function apply(ctx) {
     );
   }
 
-  function AgentCard({ agent, onEdit }) {
+  // `round` changes once the account sync has rewritten the memory key, so the
+  // check never reads a key the sync is about to replace.
+  function AgentCard({ agent, round, onEdit }) {
     const [memory, setMemory] = useState("checking");
     useEffect(() => {
+      if (round === 0) return undefined;
       let live = true;
+      setMemory("checking");
       checkMemory(agent.folder).then((r) => live && setMemory(r.ok ? "ok" : "down"));
       return () => {
         live = false;
       };
-    }, [agent.folder]);
+    }, [agent.folder, round]);
     const inBuzz = !!buzzAgent(agent.pubkey);
     const running = isRunning(agent.pubkey);
     const run = running ? ["ok", "Running in Buzz"] : inBuzz ? ["warn", "Stopped"] : ["", "In another community"];
@@ -592,6 +596,7 @@ export function apply(ctx) {
       const [note, setNote] = useState(null); // { kind, text }
       const [busyAccount, setBusyAccount] = useState(false);
       const synced = useRef(false);
+      const [round, setRound] = useState(0); // 0 until the account sync settles
 
       const refresh = async () => {
         setClaude(claudeStatus());
@@ -606,7 +611,8 @@ export function apply(ctx) {
           synced.current = true;
           sync()
             .then((next) => setAgents(next))
-            .catch((error) => setNote({ kind: "bad", text: `Couldn't reach your account: ${errorText(error)}` }));
+            .catch((error) => setNote({ kind: "bad", text: `Couldn't reach your account: ${errorText(error)}` }))
+            .finally(() => setRound((n) => n + 1));
         });
       }, []);
 
@@ -625,7 +631,7 @@ export function apply(ctx) {
       const created = (entry) => {
         setAdding(false);
         setNote({ kind: "", text: `${entry.name} is ready. Open a DM with ${entry.name} in Buzz and say hello.` });
-        refresh();
+        refresh().then(() => setRound((n) => n + 1)); // create already wrote the current key
       };
 
       const has = agents && agents.length > 0;
@@ -669,7 +675,7 @@ export function apply(ctx) {
                     h(
                       "div",
                       { className: "grid" },
-                      agents.map((a) => h(AgentCard, { key: a.folder, agent: a, onEdit: (agent) => account(agent.pubkey ? `/account/agents/${agent.pubkey}` : "/account") })),
+                      agents.map((a) => h(AgentCard, { key: a.folder, agent: a, round, onEdit: (agent) => account(agent.pubkey ? `/account/agents/${agent.pubkey}` : "/account") })),
                     ),
                     h("div", { className: "fine" }, "Buzz must be open for your agents to answer · Free during early access"),
                   ),
