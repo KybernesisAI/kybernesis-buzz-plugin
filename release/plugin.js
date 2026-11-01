@@ -87,6 +87,9 @@ const CSS = `
 .kyb .art img { width:120px; height:120px; image-rendering:pixelated; }
 .kyb .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .kyb .spread { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+.kyb .btn.danger { background:transparent; color:var(--red); border-color:var(--red); }
+.kyb .btn.danger:hover { background:rgba(220,38,38,.06); }
+.kyb .confirm { border-top:1px solid var(--line); padding-top:12px; }
 .kyb .plans { display:grid; gap:16px; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); }
 .kyb .plan { background:var(--surface); border:1px solid var(--line); padding:22px; display:flex; flex-direction:column; gap:14px; }
 .kyb .plan.main { border-color:var(--em); box-shadow:0 0 0 1px var(--em) inset; }
@@ -144,6 +147,37 @@ export function apply(ctx) {
 
   async function saveAgents(list) {
     await writeFile(`${await homeDir()}/agents.json`, JSON.stringify(list, null, 2) + "\n");
+  }
+
+  // Takes an agent out of Buzz and out of this plugin's list. Its folder stays on disk.
+  async function forgetLocally(pubkeys) {
+    const gone = new Set(pubkeys);
+    for (const pk of gone) {
+      const agent = buzzAgent(pk);
+      if (!agent) continue;
+      try {
+        await ctx.agents.remove(agent.key);
+      } catch (error) {
+        console.warn(`[kybernesis] couldn't remove an agent from Buzz: ${errorText(error)}`);
+      }
+    }
+    const list = await loadAgents();
+    const next = list.filter((a) => !gone.has(a.pubkey));
+    if (next.length !== list.length) await saveAgents(next);
+    return next;
+  }
+
+  /** Deletes an agent and everything it has on the account, then takes it out of Buzz. */
+  async function deleteAgent(agent) {
+    if (agent.pubkey) {
+      const s = await signIn();
+      const res = await call(`/api/agents/${agent.pubkey}?everything=1`, { method: "DELETE", token: s.token });
+      if (res.status !== 200) throw new Error(`Couldn't delete ${agent.name} (${res.json.error || res.status}). Try again.`);
+      return forgetLocally([agent.pubkey]);
+    }
+    const list = (await loadAgents()).filter((a) => a.folder !== agent.folder);
+    await saveAgents(list);
+    return list;
   }
 
   // ── Server ───────────────────────────────────────────────────────────
@@ -440,8 +474,13 @@ export function apply(ctx) {
     const res = await call("/api/agents", { method: "GET", token: s.token });
     if (res.status !== 200) return agents;
     const remote = new Map((res.json.agents || []).map((a) => [a.id, a]));
+    const deleted = new Set(res.json.deleted || []);
     let changed = false;
     const next = [];
+    if (agents.some((a) => deleted.has(a.pubkey))) {
+      await forgetLocally(agents.filter((a) => deleted.has(a.pubkey)).map((a) => a.pubkey));
+      return sync();
+    }
     for (const local of agents) {
       const site = local.pubkey && remote.get(local.pubkey);
       if (!site) {
@@ -712,8 +751,21 @@ export function apply(ctx) {
 
   // `round` changes once the account sync has rewritten the memory key, so the
   // check never reads a key the sync is about to replace.
-  function AgentCard({ agent, round, onEdit }) {
+  function AgentCard({ agent, round, onEdit, onDeleted }) {
     const [memory, setMemory] = useState("checking");
+    const [asking, setAsking] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    const [problem, setProblem] = useState("");
+    const remove = async () => {
+      setDeleting(true);
+      setProblem("");
+      try {
+        onDeleted(agent, await deleteAgent(agent));
+      } catch (error) {
+        setProblem(errorText(error));
+        setDeleting(false);
+      }
+    };
     useEffect(() => {
       if (round === 0) return undefined;
       let live = true;
@@ -742,8 +794,26 @@ export function apply(ctx) {
         "div",
         { className: "foot" },
         h("div", { className: "sts" }, h("span", { className: `st ${run[0]}` }, run[1]), h("span", { className: `st ${mem[0]}` }, mem[1])),
-        h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗"),
+        h(
+          "div",
+          { className: "row", style: { gap: 14 } },
+          h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗"),
+          h("button", { type: "button", className: "link", onClick: () => setAsking(true), disabled: asking }, "Delete"),
+        ),
       ),
+      asking &&
+        h(
+          "div",
+          { className: "confirm" },
+          h("p", { className: "small", style: { margin: "0 0 10px" } }, `Delete ${agent.name} and everything it has: its memory, pages, routines and its plan. This can't be undone.`),
+          h(
+            "div",
+            { className: "row" },
+            h("button", { type: "button", className: "btn danger small", disabled: deleting, onClick: remove }, deleting ? "Deleting…" : `Delete ${agent.name}`),
+            !deleting && h("button", { type: "button", className: "link", onClick: () => setAsking(false) }, "Keep it"),
+          ),
+          problem && h("div", { className: "notice bad", style: { marginTop: 10 } }, problem),
+        ),
     );
   }
 
@@ -1037,7 +1107,18 @@ export function apply(ctx) {
                     h(
                       "div",
                       { className: "grid" },
-                      agents.map((a) => h(AgentCard, { key: a.folder, agent: a, round, onEdit: (agent) => account(agent.pubkey ? `/account/agents/${agent.pubkey}` : "/account") })),
+                      agents.map((a) =>
+                        h(AgentCard, {
+                          key: a.folder,
+                          agent: a,
+                          round,
+                          onEdit: (agent) => account(agent.pubkey ? `/account/agents/${agent.pubkey}` : "/account"),
+                          onDeleted: (agent, list) => {
+                            setAgents(list);
+                            setNote({ kind: "", text: `${agent.name} is deleted, with its memory, pages and plan.` });
+                          },
+                        }),
+                      ),
                     ),
                     h("div", { className: "gap" }),
                     h("div", { className: "gap" }),
