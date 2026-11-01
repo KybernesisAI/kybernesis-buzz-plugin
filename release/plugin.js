@@ -662,10 +662,10 @@ export function apply(ctx) {
         h(
           "ul",
           null,
-          h("li", null, h("strong", null, "Proactive: "), "tells you about important mail and meetings before you ask"),
-          h("li", null, "Runs routines on a schedule, like a morning briefing"),
+          h("li", null, h("strong", null, "Proactive: "), "tells you about important things before you ask"),
+          h("li", null, "Runs routines on a schedule"),
           h("li", null, "Connects to hundreds of apps"),
-          h("li", null, "Its own memory that lasts"),
+          h("li", null, "Long-term, persistent memory"),
           h("li", null, "Makes pages, reports and cards"),
         ),
         h("button", { type: "button", className: "btn em big", onClick: onBuzz }, "Create my Kybernesis agent"),
