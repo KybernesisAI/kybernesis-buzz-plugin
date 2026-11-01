@@ -1,23 +1,99 @@
 // Kybernesis for Buzz.
 //
-// Sets up a Kybernesis agent: a Buzz Claude agent that runs on the person's
-// own Claude plan, with long-term memory. The person signs in with their Buzz
-// identity (no email, no password), the plugin gets a lasting memory key from
-// buzz.kybernesis.ai, writes the agent's folder (instructions, memory server,
-// skills) and creates the agent with one button.
+// Sets up and looks after Kybernesis agents: Buzz Claude agents that run on
+// the person's own Claude plan, with a memory that lasts. The person signs in
+// with their Buzz identity (no email, no password). buzz.kybernesis.ai keeps
+// their account: agents, memory and profile. This page creates agents, shows
+// them as cards, and applies edits made on the site to each agent's folder.
 
 export const inject = ["react", "pages", "relay", "agents", "host"];
 
 const SITE = "https://buzz.kybernesis.ai";
+const AVATAR = `${SITE}/agent.png`;
 const CLAUDE_TYPE = "buzz.claude-code/claude-code";
 const HOME = "~/Kybernesis";
 const SIGNIN_KIND = 30315;
 const SIGNIN_D = "kybernesis-signin";
 
+const ROBOT_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="31" y="6" width="2" height="8" fill="#1e293b"/><rect x="28" y="3" width="8" height="5" fill="#059669"/><rect x="8" y="27" width="5" height="14" fill="#1e293b"/><rect x="51" y="27" width="5" height="14" fill="#1e293b"/><rect x="13" y="14" width="38" height="36" fill="#1e293b"/><rect x="18" y="21" width="28" height="13" fill="#0a0a0a"/><rect x="22" y="25" width="6" height="5" fill="#10b981"/><rect x="36" y="25" width="6" height="5" fill="#10b981"/><rect x="25" y="40" width="14" height="3" fill="#059669"/><rect x="18" y="53" width="28" height="7" fill="#059669"/></svg>';
+const ICON = `data:image/svg+xml;utf8,${encodeURIComponent(ROBOT_SVG)}`;
+
+const CSS = `
+.kyb { --bg:#faf9f7; --surface:#fff; --sunk:#f5f4f2; --ink:#1e293b; --ink2:#475569; --ink3:#64748b; --muted:#94a3b8; --line:#e8e6e1; --line2:#d5d3ce; --em:#059669; --em2:#047857; --emt:rgba(5,150,105,.1); --amber:#d97706; --red:#dc2626;
+  --mono: "Space Mono", ui-monospace, "SF Mono", Menlo, monospace; --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  min-height:100%; background:var(--bg); color:var(--ink); font-family:var(--sans); font-weight:400; font-size:14px; -webkit-font-smoothing:antialiased; }
+.kyb * { box-sizing:border-box; border-radius:0; }
+.kyb .in { max-width:980px; margin:0 auto; padding:0 24px; }
+.kyb .top { background:var(--surface); border-bottom:1px solid var(--line); }
+.kyb .top .in { display:flex; align-items:center; justify-content:space-between; gap:12px; height:56px; }
+.kyb .mark { font-family:var(--mono); font-size:14px; color:var(--em); letter-spacing:.02em; }
+.kyb .acts { display:flex; gap:8px; align-items:center; }
+.kyb .body { padding:28px 0 56px; }
+.kyb h1 { font-family:var(--mono); font-weight:400; font-size:24px; line-height:1.25; margin:0 0 8px; letter-spacing:-.01em; color:var(--ink); }
+.kyb h1 em { font-style:normal; color:var(--em); }
+.kyb h2 { font-family:var(--mono); font-weight:400; font-size:16px; margin:0; color:var(--ink); }
+.kyb p { line-height:1.6; margin:0 0 12px; }
+.kyb .muted { color:var(--ink3); }
+.kyb .small { font-size:12.5px; }
+.kyb .title { font-family:var(--mono); font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink2); margin:0 0 14px; }
+.kyb .title::before { content:"// "; color:var(--em); }
+.kyb .label { font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink3); }
+.kyb .panel { background:var(--surface); border:1px solid var(--line); padding:20px; }
+.kyb .gap { height:16px; }
+.kyb .btn { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; padding:8px 12px; border:1px solid var(--ink); background:var(--ink); color:#fff; cursor:pointer; text-decoration:none; line-height:1; }
+.kyb .btn:hover { background:#0f172a; }
+.kyb .btn:disabled { opacity:.45; cursor:default; }
+.kyb .btn.em { background:var(--em); border-color:var(--em); }
+.kyb .btn.em:hover { background:var(--em2); }
+.kyb .btn.ghost { background:transparent; color:var(--ink); border-color:var(--line2); }
+.kyb .btn.ghost:hover { border-color:var(--ink3); }
+.kyb .btn.big { padding:12px 18px; font-size:12px; }
+.kyb label.f { display:block; margin-bottom:14px; }
+.kyb label.f > span { display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink3); margin-bottom:6px; }
+.kyb input, .kyb textarea { width:100%; padding:9px 11px; background:var(--surface); color:var(--ink); border:1px solid var(--line2); font:inherit; }
+.kyb input:focus, .kyb textarea:focus { outline:none; border-color:var(--em); box-shadow:0 0 0 3px var(--emt); }
+.kyb textarea { min-height:84px; resize:vertical; }
+.kyb .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); }
+.kyb .card { background:var(--surface); border:1px solid var(--line); padding:18px; display:flex; flex-direction:column; gap:12px; }
+.kyb .card:hover { border-color:var(--line2); }
+.kyb .who { display:flex; gap:12px; align-items:center; min-width:0; }
+.kyb .avatar { width:46px; height:46px; flex:none; border:1px solid var(--line); background:var(--sunk); object-fit:cover; display:block; }
+.kyb .role { color:var(--ink3); font-size:12.5px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kyb .focus { color:var(--ink2); font-size:13px; line-height:1.55; margin:0; }
+.kyb .foot { display:flex; justify-content:space-between; align-items:center; gap:8px; border-top:1px solid var(--line); padding-top:12px; margin-top:auto; }
+.kyb .sts { display:flex; flex-direction:column; gap:6px; }
+.kyb .st { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); }
+.kyb .st::before { content:""; width:7px; height:7px; background:var(--muted); }
+.kyb .st.ok { color:var(--em); } .kyb .st.ok::before { background:var(--em); box-shadow:0 0 6px rgba(5,150,105,.5); }
+.kyb .st.warn { color:var(--amber); } .kyb .st.warn::before { background:var(--amber); }
+.kyb .st.bad { color:var(--red); } .kyb .st.bad::before { background:var(--red); }
+.kyb .link { background:none; border:0; padding:0; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); cursor:pointer; text-decoration:none; }
+.kyb .link:hover { color:var(--em); }
+.kyb .steps { list-style:none; margin:0; padding:0; }
+.kyb .steps li { display:flex; gap:14px; padding:12px 0; border-top:1px solid var(--line); align-items:flex-start; }
+.kyb .steps li:first-child { border-top:0; padding-top:0; }
+.kyb .num { font-family:var(--mono); color:var(--em); width:22px; flex:none; }
+.kyb .num.done { color:var(--em); }
+.kyb .progress { list-style:none; margin:14px 0 0; padding:0; font-family:var(--mono); font-size:11.5px; letter-spacing:.04em; }
+.kyb .progress li { padding:4px 0; color:var(--muted); }
+.kyb .progress li.on { color:var(--ink); }
+.kyb .progress li.done { color:var(--em); }
+.kyb .notice { border:1px solid var(--line); border-left:3px solid var(--em); background:var(--surface); padding:11px 14px; font-size:13px; }
+.kyb .notice.bad { border-left-color:var(--red); }
+.kyb .hero { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:24px; align-items:start; }
+@media (max-width:820px) { .kyb .hero { grid-template-columns:1fr; } }
+.kyb .art { background:var(--surface); border:1px solid var(--line); padding:24px; display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center; }
+.kyb .art img { width:120px; height:120px; image-rendering:pixelated; }
+.kyb .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.kyb .spread { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+.kyb .fine { margin-top:28px; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+`;
+
 export function apply(ctx) {
   const React = ctx.react;
   const h = React.createElement;
-  const { useEffect, useState } = React;
+  const { useEffect, useState, useRef } = React;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const errorText = (error) => (error && error.message) || String(error);
@@ -39,7 +115,7 @@ export function apply(ctx) {
     return ctx.host.resolveDirectory(HOME);
   }
 
-  // The agents this plugin made on this Mac: [{ name, folder, pubkey, workspace, createdAt }].
+  // The agents this plugin made on this Mac: [{ name, role, focus, picture, folder, pubkey, workspace, createdAt }].
   async function loadAgents() {
     try {
       const list = JSON.parse(await readText(`${await homeDir()}/agents.json`));
@@ -55,12 +131,15 @@ export function apply(ctx) {
 
   // ── Server ───────────────────────────────────────────────────────────
 
-  async function call(url, { body, headers = {} } = {}) {
+  async function call(path, { method = "POST", body, token } = {}) {
     const response = await ctx.host.request({
-      url,
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body ?? {}),
+      url: `${SITE}${path}`,
+      method,
+      headers: {
+        ...(body !== undefined || method === "POST" ? { "content-type": "application/json" } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      ...(method === "GET" || method === "DELETE" ? {} : { body: JSON.stringify(body ?? {}) }),
     });
     let json = {};
     try {
@@ -68,6 +147,7 @@ export function apply(ctx) {
     } catch {
       json = {};
     }
+    if (response.status === 401 && token) session = null;
     return { status: response.status, json };
   }
 
@@ -77,8 +157,14 @@ export function apply(ctx) {
     btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
   let session = null; // { token, expiresAt, pubkey }, kept only while Buzz is open
+  let signingIn = null;
 
-  async function signIn(progress) {
+  function signIn() {
+    if (!signingIn) signingIn = doSignIn().finally(() => (signingIn = null));
+    return signingIn;
+  }
+
+  async function doSignIn() {
     const now = Math.floor(Date.now() / 1000);
     const relay = ctx.relay.snapshot();
     if (relay.status !== "ready") throw new Error("Buzz isn't connected to your community yet. Try again in a moment.");
@@ -88,13 +174,12 @@ export function apply(ctx) {
     const outbox = relay.session && relay.session.outbox;
     if (!outbox || !outbox.supports(SIGNIN_KIND)) throw new Error("This version of Buzz can't sign in plugins. Update Buzz and try again.");
 
-    progress("Signing in with your Buzz identity…");
     // A throwaway key that never leaves this Mac. The server binds the
     // challenge to it, so the signed event on the relay can't be reused.
     const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
     const clientKey = b64url(await crypto.subtle.exportKey("raw", pair.publicKey));
 
-    const issued = await call(`${SITE}/api/auth/challenge`, { body: { pubkey: viewer, clientKey } });
+    const issued = await call("/api/auth/challenge", { body: { pubkey: viewer, clientKey } });
     if (issued.status !== 200 || !issued.json.challenge) throw new Error(`Sign-in isn't available right now (${issued.json.error || issued.status}).`);
     const challenge = issued.json.challenge;
 
@@ -127,28 +212,39 @@ export function apply(ctx) {
       content: signed.content,
       sig: signed.sig,
     };
-    const verified = await call(`${SITE}/api/auth/verify`, { body: { event, clientKey, clientSig: b64url(proof) } });
+    const verified = await call("/api/auth/verify", { body: { event, clientKey, clientSig: b64url(proof) } });
     if (verified.status !== 200 || !verified.json.token) throw new Error(`Sign-in was refused (${verified.json.error || verified.status}).`);
     session = verified.json;
     return session;
   }
 
-  // ── Memory ───────────────────────────────────────────────────────────
-
-  async function getMemory(progress) {
-    const s = await signIn(progress);
-    progress("Setting up its memory…");
-    const res = await call(`${SITE}/api/memory`, { body: {}, headers: { authorization: `Bearer ${s.token}` } });
-    if (res.status === 401) {
-      session = null;
-      throw new Error("Your sign-in ran out. Press the button again.");
-    }
-    if (res.status !== 200 || !res.json.key) throw new Error(`Memory isn't available right now (${res.json.error || res.status}).`);
-    return res.json; // { workspace, key, mcpUrl }
+  // Opens the person's account on buzz.kybernesis.ai, already signed in.
+  async function openAccount(to = "/account") {
+    const s = await signIn();
+    const res = await call("/api/auth/link", { body: { to }, token: s.token });
+    if (res.status !== 200 || !res.json.url) throw new Error("Couldn't open your account. Try again.");
+    const a = document.createElement("a");
+    a.href = res.json.url;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return res.json.url;
   }
 
-  function mcpConfig(memory) {
-    return {
+  // ── Memory ───────────────────────────────────────────────────────────
+
+  async function getMemory() {
+    const s = await signIn();
+    const res = await call("/api/memory", { token: s.token });
+    if (res.status === 401) throw new Error("Your sign-in ran out. Try again.");
+    if (res.status !== 200 || !res.json.key) throw new Error(`Memory isn't available right now (${res.json.error || res.status}).`);
+    return res.json; // { workspace, key, mcpUrl }, the same every time
+  }
+
+  function mcpText(memory) {
+    const config = {
       mcpServers: {
         memory: {
           type: "http",
@@ -157,21 +253,37 @@ export function apply(ctx) {
         },
       },
     };
+    return JSON.stringify(config, null, 2) + "\n";
   }
 
-  async function readMemoryConfig(folder) {
-    const server = JSON.parse(await readText(`${folder}/.mcp.json`)).mcpServers.memory;
-    return { url: server.url, headers: server.headers };
+  // Makes sure every agent folder holds the current memory key.
+  async function syncMemoryKey(memory, agents) {
+    const text = mcpText(memory);
+    for (const agent of agents) {
+      let current = "";
+      try {
+        current = await readText(`${agent.folder}/.mcp.json`);
+      } catch {
+        current = "";
+      }
+      if (current !== text) {
+        try {
+          await writeFile(`${agent.folder}/.mcp.json`, text);
+        } catch {
+          // A folder the person deleted; nothing to update.
+        }
+      }
+    }
   }
 
   // Asks the memory server to check itself with the key in the agent's folder.
   async function checkMemory(folder) {
     try {
-      const { url, headers } = await readMemoryConfig(folder);
+      const server = JSON.parse(await readText(`${folder}/.mcp.json`)).mcpServers.memory;
       const response = await ctx.host.request({
-        url,
+        url: server.url,
         method: "POST",
-        headers: { ...headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
+        headers: { ...server.headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "arcana_validate", arguments: {} } }),
       });
       if (response.status !== 200) return { ok: false, detail: `answered ${response.status}` };
@@ -186,7 +298,7 @@ export function apply(ctx) {
     }
   }
 
-  // ── Claude ───────────────────────────────────────────────────────────
+  // ── Claude and Buzz agents ───────────────────────────────────────────
 
   function claudeStatus() {
     const type = ctx.agents.types().find((t) => t.id === CLAUDE_TYPE || t.key === CLAUDE_TYPE || /claude/i.test(t.title || ""));
@@ -203,44 +315,57 @@ export function apply(ctx) {
     return { ready: true };
   }
 
+  function buzzAgent(pubkey) {
+    try {
+      return ctx.agents.find(pubkey);
+    } catch {
+      return undefined;
+    }
+  }
+
+  function isRunning(pubkey) {
+    try {
+      return ctx.agents.snapshot().running.some((a) => a.pubkey === pubkey);
+    } catch {
+      return false;
+    }
+  }
+
   // ── Create ───────────────────────────────────────────────────────────
 
   const slugify = (name) =>
     name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "agent";
 
-  async function createAgent({ name, focus }, progress) {
+  const STEPS = ["Sign in with your Buzz identity", "Set up its memory", "Write its folder", "Check its memory", "Create the agent"];
+
+  async function createAgent({ name, role, focus }, step) {
     if (!name) throw new Error("Give your agent a name first.");
     const claude = claudeStatus();
     if (!claude.ready) throw new Error(claude.label);
-    const memory = await getMemory(progress);
+    step(0);
+    const s = await signIn();
+    step(1);
+    const memory = await getMemory();
 
-    progress("Writing its folder…");
+    step(2);
     const agents = await loadAgents();
     const home = await homeDir();
     let slug = slugify(name);
     for (let n = 2; agents.some((a) => a.folder === `${home}/agents/${slug}`); n++) slug = `${slugify(name)}-${n}`;
     const folder = `${home}/agents/${slug}`;
-    for (const file of agentFiles({ name, focus })) await writeFile(`${folder}/${file.path}`, file.text);
-    const mcp = JSON.stringify(mcpConfig(memory), null, 2) + "\n";
-    await writeFile(`${folder}/.mcp.json`, mcp);
-    // Getting memory hands out a new key and retires the old one, so every
-    // agent made before this one gets the new key too.
-    for (const agent of agents) {
-      try {
-        await writeFile(`${agent.folder}/.mcp.json`, mcp);
-      } catch {
-        // A folder the person deleted; nothing to update.
-      }
-    }
+    for (const file of agentFiles({ name, role, focus })) await writeFile(`${folder}/${file.path}`, file.text);
+    await writeFile(`${folder}/.mcp.json`, mcpText(memory));
+    await syncMemoryKey(memory, agents);
 
-    progress("Checking its memory…");
+    step(3);
     const health = await checkMemory(folder);
-    if (!health.ok) throw new Error(`Its memory didn't answer (${health.detail}). Press the button again.`);
+    if (!health.ok) throw new Error(`Its memory didn't answer (${health.detail}). Try again.`);
 
-    progress("Creating the agent…");
+    step(4);
     const created = await ctx.agents.create({
       type: CLAUDE_TYPE,
       name,
+      picture: AVATAR,
       config: {
         model: "",
         effort: "",
@@ -249,29 +374,130 @@ export function apply(ctx) {
         instructions: "You are a Kybernesis agent. Follow CLAUDE.md in your working folder.",
       },
     });
-    const entry = { name, folder, pubkey: created.pubkey, workspace: memory.workspace, createdAt: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const entry = { name, role, focus, picture: AVATAR, folder, pubkey: created.pubkey, workspace: memory.workspace, createdAt: now, syncedAt: now };
     await saveAgents([...agents, entry]);
+    await call("/api/agents", { token: s.token, body: { id: created.pubkey, name, role, focus, picture: AVATAR } });
+    step(5);
     return entry;
+  }
+
+  // ── Sync with the account on buzz.kybernesis.ai ──────────────────────
+
+  // Registers agents the site doesn't know yet, applies edits made on the
+  // site (name, role, focus, picture) to each agent's folder and Buzz
+  // profile, and keeps every folder on the current memory key.
+  async function sync() {
+    const agents = await loadAgents();
+    if (!agents.length) return agents;
+    const s = await signIn();
+    const memory = await getMemory();
+    await syncMemoryKey(memory, agents);
+    const res = await call("/api/agents", { method: "GET", token: s.token });
+    if (res.status !== 200) return agents;
+    const remote = new Map((res.json.agents || []).map((a) => [a.id, a]));
+    let changed = false;
+    const next = [];
+    for (const local of agents) {
+      const site = local.pubkey && remote.get(local.pubkey);
+      if (!site) {
+        if (local.pubkey) {
+          await call("/api/agents", {
+            token: s.token,
+            body: { id: local.pubkey, name: local.name, role: local.role, focus: local.focus, picture: local.picture || AVATAR },
+          });
+        }
+        next.push(local);
+        continue;
+      }
+      const same = site.name === local.name && (site.role || "") === (local.role || "") && (site.focus || "") === (local.focus || "") && (site.picture || "") === (local.picture || "");
+      if (same) {
+        next.push(local);
+        continue;
+      }
+      const updated = { ...local, name: site.name, role: site.role || "", focus: site.focus || "", picture: site.picture || "", syncedAt: new Date().toISOString() };
+      for (const file of agentFiles(updated)) await writeFile(`${local.folder}/${file.path}`, file.text);
+      const agent = buzzAgent(local.pubkey);
+      if (agent && (agent.name !== updated.name || (agent.picture || "") !== (updated.picture || AVATAR))) {
+        try {
+          await ctx.agents.save(agent.key, { name: updated.name, picture: updated.picture || AVATAR });
+        } catch {
+          // Buzz refused (offline or mid-turn); the next sync tries again.
+        }
+      }
+      next.push(updated);
+      changed = true;
+    }
+    if (changed) await saveAgents(next);
+    return next;
   }
 
   // ── Page ─────────────────────────────────────────────────────────────
 
-  const card = { padding: "var(--space-panel-inset, 16px)", marginBottom: 16 };
-  const field = { display: "block", width: "100%", marginTop: 6, marginBottom: 14, padding: "8px 10px", font: "inherit", color: "inherit", background: "transparent", border: "1px solid var(--border, rgba(127,127,127,.35))", borderRadius: 6 };
+  function useBuzzAgents() {
+    const [, setTick] = useState(0);
+    useEffect(() => {
+      try {
+        return ctx.agents.subscribe(() => setTick((n) => n + 1));
+      } catch {
+        return undefined;
+      }
+    }, []);
+  }
 
-  function ClaudeCard({ status, onCheck }) {
-    if (status.ready) return null;
+  function Progress({ at }) {
     return h(
-      "section",
-      { className: "ui-card", style: card },
-      h("h2", { style: { marginTop: 0 } }, "First, turn on Claude"),
-      h("p", null, "Your agent runs on your own Claude plan (Pro or Max). In Buzz, open Settings, then Agent setup, then Claude. Press Install, then Sign in."),
-      h("p", { style: { opacity: 0.7 } }, `Buzz says: ${status.label}`),
-      h("button", { className: "ui-button", onClick: onCheck }, "Check again"),
+      "ol",
+      { className: "progress" },
+      STEPS.map((label, i) => h("li", { key: label, className: i < at ? "done" : i === at ? "on" : "" }, `${i < at ? "✓" : i === at ? "›" : "·"}  ${label}`)),
     );
   }
 
-  function AgentRow({ agent }) {
+  function CreateForm({ first, claude, onCreated, onCancel }) {
+    const [name, setName] = useState(first ? "Kybernesis" : "");
+    const [role, setRole] = useState("");
+    const [focus, setFocus] = useState("");
+    const [at, setAt] = useState(-1);
+    const [problem, setProblem] = useState("");
+    const busy = at >= 0 && at < STEPS.length;
+
+    const submit = async (e) => {
+      if (e && e.preventDefault) e.preventDefault();
+      setProblem("");
+      setAt(0);
+      try {
+        const entry = await createAgent({ name: name.trim(), role: role.trim(), focus: focus.trim() }, setAt);
+        onCreated(entry);
+      } catch (error) {
+        setProblem(errorText(error));
+        setAt(-1);
+      }
+    };
+
+    return h(
+      "form",
+      { className: "panel", onSubmit: submit },
+      h(
+        "div",
+        { className: "spread", style: { marginBottom: 14 } },
+        h("div", { className: "title", style: { margin: 0 } }, first ? "Name your agent" : "New agent"),
+        onCancel && !busy && h("button", { type: "button", className: "link", onClick: onCancel }, "Cancel"),
+      ),
+      h("label", { className: "f" }, h("span", null, "Name"), h("input", { value: name, maxLength: 40, disabled: busy, onChange: (e) => setName(e.target.value), placeholder: first ? "Kybernesis" : "Give it a name" })),
+      h("label", { className: "f" }, h("span", null, "Role (optional)"), h("input", { value: role, maxLength: 80, disabled: busy, onChange: (e) => setRole(e.target.value), placeholder: "Marketing assistant" })),
+      h(
+        "label",
+        { className: "f" },
+        h("span", null, "What should it help with? (optional)"),
+        h("textarea", { value: focus, maxLength: 1000, disabled: busy, onChange: (e) => setFocus(e.target.value), placeholder: "Keep track of my clients, draft follow-ups, remember what we decided." }),
+      ),
+      h("button", { type: "submit", className: `btn em${first ? " big" : ""}`, disabled: busy || !claude.ready || !name.trim() }, busy ? "Working…" : first ? "Create my agent" : "Create agent"),
+      at >= 0 && h(Progress, { at }),
+      problem && h("div", { className: "notice bad", style: { marginTop: 14 } }, problem),
+    );
+  }
+
+  function AgentCard({ agent, onEdit }) {
     const [memory, setMemory] = useState("checking");
     useEffect(() => {
       let live = true;
@@ -280,66 +506,76 @@ export function apply(ctx) {
         live = false;
       };
     }, [agent.folder]);
-    const label = { checking: "Checking memory…", ok: "Memory is working", down: "Memory isn't answering" }[memory];
+    const inBuzz = !!buzzAgent(agent.pubkey);
+    const running = isRunning(agent.pubkey);
+    const run = running ? ["ok", "Running in Buzz"] : inBuzz ? ["warn", "Stopped"] : ["", "In another community"];
+    const mem = { checking: ["", "Checking memory"], ok: ["ok", "Memory on"], down: ["bad", "Memory not answering"] }[memory];
+    const focus = agent.focus && agent.focus.length > 120 ? `${agent.focus.slice(0, 120)}…` : agent.focus;
     return h(
-      "li",
-      { style: { marginBottom: 10 } },
-      h("strong", null, agent.name),
-      h("span", { style: { opacity: 0.7, marginLeft: 8 } }, label),
-    );
-  }
-
-  function AgentsCard({ agents }) {
-    if (!agents.length) return null;
-    return h(
-      "section",
-      { className: "ui-card", style: card },
-      h("h2", { style: { marginTop: 0 } }, agents.length === 1 ? "Your agent" : "Your agents"),
-      h("ul", { style: { paddingLeft: 18, margin: 0 } }, agents.map((a) => h(AgentRow, { key: a.folder, agent: a }))),
-      h("p", { style: { opacity: 0.7, marginBottom: 0 } }, "Open a DM with your agent in Buzz to talk to it, or add it to a channel. Buzz must be open for it to answer."),
-    );
-  }
-
-  function CreateCard({ claude, agents, onCreated }) {
-    const [name, setName] = useState(agents.length ? "" : "Kybernesis");
-    const [focus, setFocus] = useState("");
-    const [busy, setBusy] = useState(false);
-    const [step, setStep] = useState("");
-    const [problem, setProblem] = useState("");
-    const [done, setDone] = useState(null);
-
-    const submit = async () => {
-      setBusy(true);
-      setProblem("");
-      setDone(null);
-      try {
-        const entry = await createAgent({ name: name.trim(), focus: focus.trim() }, setStep);
-        setDone(entry);
-        onCreated();
-      } catch (error) {
-        setProblem(errorText(error));
-      } finally {
-        setBusy(false);
-        setStep("");
-      }
-    };
-
-    return h(
-      "section",
-      { className: "ui-card", style: card },
-      h("h2", { style: { marginTop: 0 } }, agents.length ? "Create another agent" : "Create your agent"),
-      h("p", null, "It runs on your Claude plan, works in your Buzz DMs and channels, and remembers what matters across every conversation."),
-      h("label", null, "Name", h("input", { style: field, value: name, maxLength: 40, disabled: busy, onChange: (e) => setName(e.target.value) })),
+      "div",
+      { className: "card" },
       h(
-        "label",
-        null,
-        "What should it help you with? (optional)",
-        h("textarea", { style: { ...field, minHeight: 72 }, value: focus, maxLength: 1000, disabled: busy, placeholder: "For example: keep track of my clients, draft follow-ups, remember what we decided.", onChange: (e) => setFocus(e.target.value) }),
+        "div",
+        { className: "who" },
+        h("img", { className: "avatar", src: agent.picture || AVATAR, alt: "" }),
+        h("div", { style: { minWidth: 0 } }, h("h2", null, agent.name), h("div", { className: "role" }, agent.role || "Kybernesis agent")),
       ),
-      h("button", { className: "ui-button", disabled: busy || !claude.ready || !name.trim(), onClick: submit }, busy ? "Working…" : "Create my agent"),
-      step && h("p", { style: { opacity: 0.7 } }, step),
-      problem && h("p", { style: { color: "var(--color-danger, #c0392b)" } }, problem),
-      done && h("p", null, `${done.name} is ready. Open a DM with ${done.name} in Buzz and say hello.`),
+      focus ? h("p", { className: "focus" }, focus) : null,
+      h(
+        "div",
+        { className: "foot" },
+        h("div", { className: "sts" }, h("span", { className: `st ${run[0]}` }, run[1]), h("span", { className: `st ${mem[0]}` }, mem[1])),
+        h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗"),
+      ),
+    );
+  }
+
+  function Welcome({ claude, onCheck, onCreated }) {
+    return h(
+      "div",
+      { className: "hero" },
+      h(
+        "div",
+        null,
+        h("h1", null, "Your own agent in Buzz, with a ", h("em", null, "memory that lasts"), "."),
+        h("p", { className: "muted", style: { marginBottom: 24 } }, "It runs on your Claude plan, answers in your DMs and channels, and remembers the people, decisions and details that matter."),
+        h(
+          "div",
+          { className: "panel", style: { marginBottom: 16 } },
+          h("div", { className: "title" }, "Before you start"),
+          h(
+            "ol",
+            { className: "steps" },
+            h(
+              "li",
+              null,
+              h("span", { className: "num" }, claude.ready ? "✓" : "01"),
+              h(
+                "div",
+                null,
+                h("div", null, claude.ready ? "Claude is on in Buzz." : "Turn on Claude in Buzz."),
+                !claude.ready &&
+                  h(
+                    "div",
+                    { className: "small muted", style: { marginTop: 4 } },
+                    "Settings, then Agent setup, then Claude. Press Install, then Sign in with your Claude Pro or Max plan. ",
+                    h("button", { type: "button", className: "link", onClick: onCheck }, "Check again"),
+                  ),
+              ),
+            ),
+            h("li", null, h("span", { className: "num" }, "02"), h("div", null, "Name your agent below and create it. It takes about ten seconds.")),
+            h("li", null, h("span", { className: "num" }, "03"), h("div", null, "Open a DM with it in Buzz and say hello.")),
+          ),
+        ),
+        h(CreateForm, { first: true, claude, onCreated }),
+      ),
+      h(
+        "div",
+        { className: "art" },
+        h("img", { src: AVATAR, alt: "" }),
+        h("div", { className: "label" }, "Kybernesis agent"),
+        h("p", { className: "small muted", style: { margin: 0 } }, "Your Buzz identity is your account. No email, no password."),
+      ),
     );
   }
 
@@ -347,32 +583,108 @@ export function apply(ctx) {
     id: "home",
     title: "Kybernesis",
     primary: true,
+    icon: ICON,
     component: function Home() {
+      useBuzzAgents();
       const [claude, setClaude] = useState(() => claudeStatus());
-      const [agents, setAgents] = useState([]);
-      const refresh = () => {
+      const [agents, setAgents] = useState(null);
+      const [adding, setAdding] = useState(false);
+      const [note, setNote] = useState(null); // { kind, text }
+      const [busyAccount, setBusyAccount] = useState(false);
+      const synced = useRef(false);
+
+      const refresh = async () => {
         setClaude(claudeStatus());
-        loadAgents().then(setAgents);
+        const list = await loadAgents();
+        setAgents(list);
+        return list;
       };
-      useEffect(refresh, []);
+
+      useEffect(() => {
+        refresh().then((list) => {
+          if (!list.length || synced.current) return;
+          synced.current = true;
+          sync()
+            .then((next) => setAgents(next))
+            .catch((error) => setNote({ kind: "bad", text: `Couldn't reach your account: ${errorText(error)}` }));
+        });
+      }, []);
+
+      const account = async (to) => {
+        setBusyAccount(true);
+        setNote(null);
+        try {
+          await openAccount(to);
+        } catch (error) {
+          setNote({ kind: "bad", text: errorText(error) });
+        } finally {
+          setBusyAccount(false);
+        }
+      };
+
+      const created = (entry) => {
+        setAdding(false);
+        setNote({ kind: "", text: `${entry.name} is ready. Open a DM with ${entry.name} in Buzz and say hello.` });
+        refresh();
+      };
+
+      const has = agents && agents.length > 0;
       return h(
         "div",
-        { style: { padding: "var(--space-panel-inset, 16px)", maxWidth: 720 } },
-        h("h1", null, "Kybernesis"),
-        h("p", { style: { opacity: 0.7 } }, "Your own agent in Buzz, with a memory that lasts."),
-        h(ClaudeCard, { status: claude, onCheck: refresh }),
-        h(AgentsCard, { agents }),
-        h(CreateCard, { claude, agents, onCreated: refresh }),
+        { className: "kyb" },
+        h("style", null, CSS),
+        h(
+          "header",
+          { className: "top" },
+          h(
+            "div",
+            { className: "in" },
+            h("span", { className: "mark" }, "//KYBERNESIS"),
+            h(
+              "div",
+              { className: "acts" },
+              h("button", { type: "button", className: "btn ghost", disabled: busyAccount, onClick: () => account("/account") }, busyAccount ? "Opening…" : "Account ↗"),
+              has && !adding && h("button", { type: "button", className: "btn", onClick: () => setAdding(true) }, "+ New agent"),
+            ),
+          ),
+        ),
+        h(
+          "div",
+          { className: "body" },
+          h(
+            "div",
+            { className: "in" },
+            note && h("div", { className: `notice ${note.kind}`, style: { marginBottom: 16 } }, note.text),
+            agents === null
+              ? h("p", { className: "muted" }, "Loading…")
+              : !has
+                ? h(Welcome, { claude, onCheck: refresh, onCreated: created })
+                : h(
+                    React.Fragment,
+                    null,
+                    !claude.ready &&
+                      h("div", { className: "notice bad", style: { marginBottom: 16 } }, `Your agents can't answer until Claude is on in Buzz: ${claude.label}`),
+                    adding && h(React.Fragment, null, h(CreateForm, { first: false, claude, onCreated: created, onCancel: () => setAdding(false) }), h("div", { className: "gap" })),
+                    h("div", { className: "title" }, agents.length === 1 ? "Your agent" : `Your agents · ${agents.length}`),
+                    h(
+                      "div",
+                      { className: "grid" },
+                      agents.map((a) => h(AgentCard, { key: a.folder, agent: a, onEdit: (agent) => account(agent.pubkey ? `/account/agents/${agent.pubkey}` : "/account") })),
+                    ),
+                    h("div", { className: "fine" }, "Buzz must be open for your agents to answer · Free during early access"),
+                  ),
+          ),
+        ),
       );
     },
   });
 
   // ── The agent's folder ───────────────────────────────────────────────
 
-  function agentFiles({ name, focus }) {
+  function agentFiles({ name, role, focus }) {
     const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory"] };
     return [
-      { path: "CLAUDE.md", text: claudeMd(name, focus) },
+      { path: "CLAUDE.md", text: claudeMd(name, role, focus) },
       { path: ".claude/settings.json", text: JSON.stringify(settings, null, 2) + "\n" },
       { path: ".claude/skills/recall/SKILL.md", text: RECALL_SKILL },
       { path: ".claude/skills/remember/SKILL.md", text: REMEMBER_SKILL },
@@ -380,11 +692,12 @@ export function apply(ctx) {
     ];
   }
 
-  function claudeMd(name, focus) {
+  function claudeMd(name, role, focus) {
     const about = focus ? `\n## What your owner wants help with\n\n${focus.replace(/\r/g, "")}\n` : "";
+    const job = role ? `, a Kybernesis agent working as their ${role.replace(/[\r\n]+/g, " ")}` : ", a Kybernesis agent";
     return `# ${name}
 
-You are ${name}, a Kybernesis agent. You work in Buzz, a team chat app, for the person who created you: answer their DMs, and help in the channels they add you to. Keep replies short and plain, the way a capable colleague writes in chat.
+You are ${name}${job}. You work in Buzz, a team chat app, for the person who created you: answer their DMs, and help in the channels they add you to. Keep replies short and plain, the way a capable colleague writes in chat.
 ${about}
 ## Memory
 
