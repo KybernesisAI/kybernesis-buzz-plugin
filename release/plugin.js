@@ -499,7 +499,111 @@ export function apply(ctx) {
     );
   }
 
-  function CreateForm({ first, claude, onCreated, onCancel }) {
+  // ── Paying for a new agent ───────────────────────────────────────────
+  //
+  // Each agent is its own plan. Before an agent is created, the site says
+  // whether a paid plan is waiting; if not, the person pays in Stripe Checkout
+  // in their browser, and this checks back until the payment lands.
+
+  async function billingStatus() {
+    const s = await signIn();
+    const res = await call("/api/billing", { method: "GET", token: s.token });
+    if (res.status !== 200) throw new Error("Couldn't reach your account. Try again.");
+    return res.json; // { payments, testMode, needsPlan, prices }
+  }
+
+  async function openCheckout() {
+    const s = await signIn();
+    const res = await call("/api/billing/checkout", { token: s.token, body: {} });
+    if (res.status !== 200 || !res.json.url) throw new Error("Payments didn't open. Try again in a moment.");
+    const a = document.createElement("a");
+    a.href = res.json.url;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function PlanGate({ status, onPaid, onCancel }) {
+    const [state, setState] = useState("idle"); // idle | opening | waiting | checking
+    const [problem, setProblem] = useState("");
+    const p = status.prices;
+    const check = async (quiet) => {
+      if (!quiet) setState("checking");
+      try {
+        const next = await billingStatus();
+        if (!next.needsPlan) return onPaid(next);
+        if (!quiet) setProblem("No payment yet. Finish it in your browser, then check again.");
+      } catch (error) {
+        if (!quiet) setProblem(errorText(error));
+      }
+      setState("waiting");
+    };
+    useEffect(() => {
+      if (state !== "waiting") return undefined;
+      const timer = setInterval(() => check(true), 4000);
+      return () => clearInterval(timer);
+    }, [state]);
+    const pay = async () => {
+      setProblem("");
+      setState("opening");
+      try {
+        await openCheckout();
+        setState("waiting");
+      } catch (error) {
+        setProblem(errorText(error));
+        setState("idle");
+      }
+    };
+    return h(
+      "div",
+      { className: "panel" },
+      h(
+        "div",
+        { className: "spread", style: { marginBottom: 10 } },
+        h("div", { className: "title", style: { margin: 0 } }, "Your new agent"),
+        onCancel && h("button", { type: "button", className: "link", onClick: onCancel }, "Cancel"),
+      ),
+      h("p", { style: { margin: "0 0 6px" } }, `$${p.setup} to set up, which covers the first month. Then $${p.monthly} a month. Cancel any time.`),
+      h("p", { className: "small muted", style: { margin: "0 0 14px" } }, "You pay securely with Stripe in your browser, then come back here and name your agent."),
+      status.testMode && h("div", { className: "notice", style: { marginBottom: 14 } }, "Test mode: card 4242 4242 4242 4242, any future date, any three-digit code. No real money moves."),
+      state === "idle" || state === "opening"
+        ? h("button", { type: "button", className: "btn em big", disabled: state === "opening", onClick: pay }, state === "opening" ? "Opening Stripe…" : `Pay $${p.setup} and continue`)
+        : h(
+            "div",
+            { className: "row", style: { gap: 12, alignItems: "center", flexWrap: "wrap" } },
+            h("span", { className: "small" }, "Waiting for your payment…"),
+            h("button", { type: "button", className: "btn small", disabled: state === "checking", onClick: () => check(false) }, state === "checking" ? "Checking…" : "Check again"),
+            h("button", { type: "button", className: "link", onClick: pay }, "Open the payment page again"),
+          ),
+      problem && h("div", { className: "notice bad", style: { marginTop: 14 } }, problem),
+    );
+  }
+
+  function CreateForm(props) {
+    const [status, setStatus] = useState(null);
+    const [problem, setProblem] = useState("");
+    const load = () => {
+      setProblem("");
+      billingStatus()
+        .then(setStatus)
+        .catch((error) => setProblem(errorText(error)));
+    };
+    useEffect(load, []);
+    if (problem)
+      return h(
+        "div",
+        { className: "panel" },
+        h("div", { className: "notice bad", style: { marginBottom: 12 } }, problem),
+        h("button", { type: "button", className: "btn small", onClick: load }, "Try again"),
+      );
+    if (!status) return h("div", { className: "panel" }, h("p", { className: "small muted", style: { margin: 0 } }, "Checking your account…"));
+    if (status.needsPlan) return h(PlanGate, { status, onPaid: setStatus, onCancel: props.onCancel });
+    return h(NameForm, props);
+  }
+
+  function NameForm({ first, claude, onCreated, onCancel }) {
     const [name, setName] = useState(first ? "Kybernesis" : "");
     const [role, setRole] = useState("");
     const [focus, setFocus] = useState("");
