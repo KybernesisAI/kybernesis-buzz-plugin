@@ -57,6 +57,12 @@ const CSS = `
 .kyb .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); }
 .kyb .card { background:var(--surface); border:1px solid var(--line); padding:18px; display:flex; flex-direction:column; gap:12px; }
 .kyb .card:hover { border-color:var(--line2); }
+.kyb .card { position:relative; }
+.kyb .card .who { padding-right:110px; }
+.kyb .card-acts { position:absolute; top:14px; right:16px; display:flex; gap:14px; align-items:center; }
+.kyb .card-acts .del { color:var(--red); opacity:0; pointer-events:none; transition:opacity .12s; }
+.kyb .card:hover .card-acts .del, .kyb .card-acts .del:focus-visible { opacity:1; pointer-events:auto; }
+.kyb .card-acts .del:hover { color:var(--red); text-decoration:underline; }
 .kyb .who { display:flex; gap:12px; align-items:center; min-width:0; }
 .kyb .avatar { width:46px; height:46px; flex:none; border:1px solid var(--line); background:var(--sunk); object-fit:cover; display:block; }
 .kyb .role { color:var(--ink3); font-size:12.5px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -785,6 +791,12 @@ export function apply(ctx) {
       { className: "card" },
       h(
         "div",
+        { className: "card-acts" },
+        h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗"),
+        h("button", { type: "button", className: "link del", onClick: () => setAsking(true), disabled: asking }, "Delete"),
+      ),
+      h(
+        "div",
         { className: "who" },
         h("img", { className: "avatar", src: agent.picture || AVATAR, alt: "" }),
         h("div", { style: { minWidth: 0 } }, h("h2", null, agent.name), h("div", { className: "role" }, agent.role || "Kybernesis agent")),
@@ -794,12 +806,6 @@ export function apply(ctx) {
         "div",
         { className: "foot" },
         h("div", { className: "sts" }, h("span", { className: `st ${run[0]}` }, run[1]), h("span", { className: `st ${mem[0]}` }, mem[1])),
-        h(
-          "div",
-          { className: "row", style: { gap: 14 } },
-          h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗"),
-          h("button", { type: "button", className: "link", onClick: () => setAsking(true), disabled: asking }, "Delete"),
-        ),
       ),
       asking &&
         h(
