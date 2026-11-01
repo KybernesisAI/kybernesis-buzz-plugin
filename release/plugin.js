@@ -350,7 +350,7 @@ export function apply(ctx) {
 
   // Bumped whenever the files an agent's folder gets (instructions, skills) change;
   // the next sync rewrites older folders.
-  const KIT_VERSION = 5;
+  const KIT_VERSION = 6;
 
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
@@ -801,7 +801,8 @@ export function apply(ctx) {
   // ── The agent's folder ───────────────────────────────────────────────
 
   function agentFiles({ name, role, focus }) {
-    const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory", "kybernesis"] };
+    // disableClaudeAiConnectors: the person's own claude.ai connectors would reach every agent; apps come only through the per-agent kybernesis server.
+    const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory", "kybernesis"], disableClaudeAiConnectors: true };
     return [
       { path: "CLAUDE.md", text: claudeMd(name, role, focus) },
       { path: ".claude/settings.json", text: JSON.stringify(settings, null, 2) + "\n" },
