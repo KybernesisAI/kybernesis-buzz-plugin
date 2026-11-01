@@ -131,7 +131,7 @@ export function apply(ctx) {
     return h(
       Step,
       { title: "2. Sign a challenge with my Buzz key" },
-      h("p", null, "Publishes one app-data event (kind 30078) in this community and reads back the signed copy."),
+      h("p", null, "Publishes one status event (kind 30315, under its own name so nobody sees it) and reads back the signed copy."),
       h("button", {
         className: "ui-button",
         disabled: busy,
@@ -142,12 +142,12 @@ export function apply(ctx) {
             const { session, viewer } = relay;
             const outbox = session.outbox;
             if (!outbox) throw new Error("This connection has no outbox");
-            if (!outbox.supports(30078)) throw new Error("Outbox does not support kind 30078");
-            const challenge = `kybernesis-spike-${crypto.randomUUID()}`;
+            if (!outbox.supports(30315)) throw new Error("Outbox does not support kind 30315");
+            const challenge = `kyb-${crypto.randomUUID()}`;
             // With a recovery key the outbox keeps the operation, signed copy
             // included, after the relay confirms it, until we acknowledge it.
             const id = outbox.send(
-              { kind: 30078, content: challenge, tags: [["d", "kybernesis-signin"]] },
+              { kind: 30315, content: challenge, tags: [["d", "kybernesis-signin"]] },
               { key: `kybernesis-signin:${challenge}`, value: "1" },
             );
             progress(`Sent ${id}, waiting for the signed copy…`);
