@@ -253,6 +253,8 @@ export function apply(ctx) {
     return res.json.grants; // { <pubkey>: { workspace, key, mcpUrl } }
   }
 
+  // The agent's tool servers: its own memory, and the Kybernesis tools
+  // (pages, cards, routines) under its own token.
   function mcpText(memory) {
     const config = {
       mcpServers: {
@@ -261,6 +263,9 @@ export function apply(ctx) {
           url: memory.mcpUrl,
           headers: { Authorization: `Bearer ${memory.key}`, "X-Kyberagent-Agent": memory.workspace },
         },
+        ...(memory.tools
+          ? { kybernesis: { type: "http", url: memory.tools.url, headers: { Authorization: `Bearer ${memory.tools.token}` } } }
+          : {}),
       },
     };
     return JSON.stringify(config, null, 2) + "\n";
@@ -343,6 +348,10 @@ export function apply(ctx) {
   const slugify = (name) =>
     name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "agent";
 
+  // Bumped whenever the files an agent's folder gets (instructions, skills) change;
+  // the next sync rewrites older folders.
+  const KIT_VERSION = 3;
+
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
   async function createAgent({ name, role, focus }, step) {
@@ -376,7 +385,7 @@ export function apply(ctx) {
       },
     });
     const now = new Date().toISOString();
-    const entry = { name, role, focus, picture: AVATAR, folder, pubkey: created.pubkey, createdAt: now, syncedAt: now };
+    const entry = { name, role, focus, picture: AVATAR, folder, pubkey: created.pubkey, kit: KIT_VERSION, createdAt: now, syncedAt: now };
     await saveAgents([...agents, entry]);
     await call("/api/agents", { token: s.token, body: { id: created.pubkey, name, role, focus, picture: AVATAR } });
 
@@ -421,10 +430,14 @@ export function apply(ctx) {
       }
       const same = site.name === local.name && (site.role || "") === (local.role || "") && (site.focus || "") === (local.focus || "") && (site.picture || "") === (local.picture || "");
       if (same) {
-        next.push(local);
+        if (local.kit !== KIT_VERSION) {
+          for (const file of agentFiles(local)) await writeFile(`${local.folder}/${file.path}`, file.text);
+          next.push({ ...local, kit: KIT_VERSION });
+          changed = true;
+        } else next.push(local);
         continue;
       }
-      const updated = { ...local, name: site.name, role: site.role || "", focus: site.focus || "", picture: site.picture || "", syncedAt: new Date().toISOString() };
+      const updated = { ...local, name: site.name, role: site.role || "", focus: site.focus || "", picture: site.picture || "", kit: KIT_VERSION, syncedAt: new Date().toISOString() };
       for (const file of agentFiles(updated)) await writeFile(`${local.folder}/${file.path}`, file.text);
       const agent = buzzAgent(local.pubkey);
       if (agent && (agent.name !== updated.name || (agent.picture || "") !== (updated.picture || AVATAR))) {
@@ -604,6 +617,85 @@ export function apply(ctx) {
     );
   }
 
+  // ── Routines ─────────────────────────────────────────────────────────
+  //
+  // Routines live on the account (agents make them with create_routine). While
+  // Buzz is open, this checks every minute and, when one is due, sends its
+  // prompt to the agent in its DM as the person. Times are this Mac's local time.
+
+  const ROUTINE_REFRESH_MS = 10 * 60 * 1000;
+  const ROUTINE_GRACE_MS = 15 * 60 * 1000; // a slot missed by more than this (Buzz was closed) is skipped
+  let routineCache = { at: 0, routines: {} };
+
+  function lastSlot(r, now) {
+    const [hh, mm] = r.every === "hour" ? [now.getHours(), Number(r.at.slice(1))] : r.at.split(":").map(Number);
+    const slot = new Date(now);
+    slot.setHours(hh, mm, 0, 0);
+    if (r.every === "hour") {
+      if (slot > now) slot.setHours(slot.getHours() - 1);
+      return slot;
+    }
+    for (let i = 0; i < 8; i++) {
+      const day = slot.getDay();
+      const fits = r.every === "day" || (r.every === "weekday" && day >= 1 && day <= 5) || (r.every === "week" && day === r.weekday);
+      if (fits && slot <= now) return slot;
+      slot.setDate(slot.getDate() - 1);
+    }
+    return null;
+  }
+
+  async function routineRuns() {
+    try {
+      return JSON.parse(await readText(`${await homeDir()}/routine-runs.json`)) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  let ticking = false;
+  async function tickRoutines() {
+    if (ticking) return;
+    ticking = true;
+    try {
+      const agents = (await loadAgents()).filter((a) => a.pubkey);
+      if (!agents.length) return;
+      const relay = ctx.relay.snapshot();
+      if (relay.status !== "ready" || !relay.session) return;
+      if (Date.now() - routineCache.at > ROUTINE_REFRESH_MS) {
+        const s = await signIn();
+        const res = await call("/api/routines", { method: "GET", token: s.token });
+        if (res.status === 200 && res.json.routines) routineCache = { at: Date.now(), routines: res.json.routines };
+      }
+      const now = new Date();
+      const runs = await routineRuns();
+      let ran = false;
+      for (const agent of agents) {
+        for (const r of routineCache.routines[agent.pubkey] || []) {
+          const slot = lastSlot(r, now);
+          if (!slot || slot.getTime() < Date.parse(r.createdAt)) continue;
+          const key = `${agent.pubkey}:${r.id}`;
+          if ((runs[key] || 0) >= slot.getTime() || now - slot > ROUTINE_GRACE_MS) continue;
+          runs[key] = slot.getTime();
+          ran = true;
+          try {
+            const channel = await relay.session.directMessages.open([agent.pubkey]);
+            relay.session.messages.send(channel, `Routine: ${r.name}\n\n${r.prompt}`, [agent.pubkey], [], undefined);
+          } catch (error) {
+            console.warn(`[kybernesis] routine ${r.name} didn't start: ${errorText(error)}`);
+          }
+        }
+      }
+      if (ran) await writeFile(`${await homeDir()}/routine-runs.json`, JSON.stringify(runs) + "\n");
+    } catch (error) {
+      console.warn(`[kybernesis] routines: ${errorText(error)}`);
+    } finally {
+      ticking = false;
+    }
+  }
+
+  setTimeout(tickRoutines, 20 * 1000);
+  setInterval(tickRoutines, 60 * 1000);
+
   ctx.pages.register({
     id: "home",
     title: "Kybernesis",
@@ -709,13 +801,15 @@ export function apply(ctx) {
   // ── The agent's folder ───────────────────────────────────────────────
 
   function agentFiles({ name, role, focus }) {
-    const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory"] };
+    const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory", "kybernesis"] };
     return [
       { path: "CLAUDE.md", text: claudeMd(name, role, focus) },
       { path: ".claude/settings.json", text: JSON.stringify(settings, null, 2) + "\n" },
       { path: ".claude/skills/recall/SKILL.md", text: RECALL_SKILL },
       { path: ".claude/skills/remember/SKILL.md", text: REMEMBER_SKILL },
       { path: ".claude/skills/notes/SKILL.md", text: NOTES_SKILL },
+      { path: ".claude/skills/cards/SKILL.md", text: CARDS_SKILL },
+      { path: ".claude/skills/pages/SKILL.md", text: PAGES_SKILL },
     ];
   }
 
@@ -743,8 +837,78 @@ For long material (meeting notes, research, decisions with their reasons), use t
 Never save passwords, access tokens, payment details, private keys or one-time codes.
 
 Load the recall, remember or notes skill for the full steps when a memory task is more than one obvious call.
+
+## Cards
+
+Buzz can draw your replies as cards: key numbers, charts, tables, checklists, a profile of a person or company, and buttons to press. Use the cards skill when a reply is mainly numbers, a comparison, a status or a list, and to ask before anything that can't be undone or that others will see. The \`make_card\` tool on the \`kybernesis\` server builds the exact message for you.
+
+## Pages
+
+For anything longer or richer than a chat reply (a report, a dashboard, a brief, a small app), make an HTML page and publish it with \`publish_page\` on the \`kybernesis\` server. It returns a private link and a message that shows the page inline in Buzz; send that message as-is. Use the pages skill.
+
+## Routines
+
+You can do things on a schedule with \`create_routine\` (a morning briefing, a weekly summary). Agree the name and time with the person first. When a message starts with "Routine:", it comes from one of your routines: do the task and reply in that conversation. Routines run while Buzz is open on the person's Mac.
 `;
   }
+
+  const CARDS_SKILL = `---
+description: "Send a card in Buzz instead of plain text: a few key numbers, a trend chart, a table, a checklist of progress, a short profile of a person or company, a link, or a question with buttons to press. Use when a reply is mainly numbers, a comparison, a status or a list, or when you want the person to pick from a few options or approve something before you do it."
+---
+
+# Cards
+
+Buzz draws a card from a message that carries one in a hidden line. People without the Kybernesis cards plugin read the plain text above the line, so that text must stand on its own.
+
+## How a card message looks
+
+\`\`\`
+Website, last 7 days: 12,480 visitors (+8%), 3.1% sign-up rate.
+
+<!-- kyb:card v1 {"kyb":1,"card":"stats","title":"Website · last 7 days","data":{"tiles":[{"label":"Visitors","value":"12,480","change":"+8%","tone":"good"},{"label":"Sign-up rate","value":"3.1%"}]}} -->
+\`\`\`
+
+Rules:
+1. First a short plain-text version of the card. Then a blank line. Then the card on ONE line: \`<!-- kyb:card v1 \` + compact JSON + \` -->\`.
+2. The JSON must be valid, on one line, and must never contain two hyphens in a row (write a long dash as \`\\u2014\`). Always \`"kyb":1\`.
+3. Send a card as its own message when you can, after your reply. Otherwise put it at the very end of your reply.
+4. Don't repeat the card's contents in your words. One or two sentences on what matters is enough.
+5. Never put passwords, keys or private details in a card. Cards are data, never HTML.
+
+## Card types (\`card\` and its \`data\`)
+
+- \`stats\`: \`{"tiles":[{"label","value","change"?,"tone"?}]}\`, 1 to 6 tiles. Values already formatted ("12,480", "2.5%"). \`tone\` is good, bad or neutral; up is not always good.
+- \`chart\`: \`{"kind":"line"|"bar"|"area","x":["Mon","Tue",...],"series":[{"name","values":[...]}],"unit"?}\`, up to 4 series, one value per x label.
+- \`table\`: \`{"columns":[{"key","label","align"?:"right"}],"rows":[{key: value}],"total"?}\`, up to 8 columns and 50 rows. Right-align numbers.
+- \`checklist\`: \`{"items":[{"text","state":"done"|"waiting"|"failed"|"skipped","detail"?}]}\`, up to 20.
+- \`brief\`: a person or company. \`{"name","subtitle"?,"points"?:[...],"facts"?:[{"label","value"}],"tiles"?:[...]}\`.
+- \`link\`: \`{"url","title"?,"site"?,"description"?}\`, https only.
+
+Optional on every card: \`"title"\`, \`"source"\` (where the data came from), \`"id"\` (a later card with the same id replaces this one).
+
+## Buttons: choices and approvals
+
+Add \`"actions":[{"label":"Send it","say":"Yes, send it","primary":true},{"label":"Change it","say":"Let me change it first"}]\`. Pressing a button sends its \`say\` text to you as the person's next message, so word it as their answer. Up to 4 buttons.
+
+Before you do anything that can't be undone or that others will see (send an email, post somewhere, delete something, spend money), show what you will do and ask with buttons, then wait for the answer. A \`checklist\` or \`brief\` card with the details and two buttons works well.
+
+For a page with links (a report or dashboard), use the pages skill instead.
+`;
+
+  const PAGES_SKILL = `---
+description: "Make a page: a report, dashboard, brief, plan, comparison or one-page app, published to a private link and shown inline in Buzz. Use when an answer is too long or too visual for a chat message, or when someone asks for a report, dashboard, document, page or write-up they can open and share."
+---
+
+# Pages
+
+1. Gather what goes in it first (memory, files, the web). Pages are for real content, not filler.
+2. Write one complete HTML document: \`<!doctype html>\`, a \`<title>\`, inline \`<style>\`, and inline \`<script>\` only if it needs interaction. Charts can use a library from cdnjs.cloudflare.com or cdn.jsdelivr.net with an exact version. Keep it under 2 MB; no secrets, keys or passwords in it.
+3. Make it readable: a clear title, the answer first, short sections, tables for numbers, and a layout that works on a phone (max-width about 760px, 16px side padding). Warm paper background #faf9f7, slate text #1e293b, emerald #059669 for accents, system fonts.
+4. Call \`publish_page({ title, html })\` on the \`kybernesis\` server. Send the \`message\` it returns exactly as it is: Buzz draws it as the page, with an Open button. Add one sentence on what the page shows.
+5. To change a page, call \`publish_page\` again with its \`page_id\`; the link stays the same. \`list_pages\` shows what you have published. Delete a page only when the person asks.
+
+Anyone with the link can open the page, so don't put anything in it the person wouldn't want shared.
+`;
 
   const RECALL_SKILL = `---
 description: "Look up what your memory knows about a person, project, company, place or topic. Use whenever someone mentions a name, references a project or company, asks about past conversations, or says who is, what do we know about, tell me about, or recall."
