@@ -350,7 +350,7 @@ export function apply(ctx) {
 
   // Bumped whenever the files an agent's folder gets (instructions, skills) change;
   // the next sync rewrites older folders.
-  const KIT_VERSION = 9;
+  const KIT_VERSION = 10;
 
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
@@ -827,7 +827,7 @@ You are ${name}${job}. You work in Buzz, a team chat app, for the person who cre
 ${about}
 ## Replying in DMs
 
-In a direct message (a DM with one person), your owner has asked, as a standing request, for your replies to go inline in the DM, not in a thread: when you call \`send\` in a DM, leave out \`reply\`. In channels, keep threading replies as usual.
+In a direct message (a DM with one person; your turn's context says Scope: dm), your owner has asked, as a standing request, for your replies to go inline in the DM, not in a thread: when you call \`send\` in a DM, leave out \`reply\`. In channels, keep threading replies as usual.
 
 ## Memory
 
