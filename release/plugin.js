@@ -350,7 +350,7 @@ export function apply(ctx) {
 
   // Bumped whenever the files an agent's folder gets (instructions, skills) change;
   // the next sync rewrites older folders.
-  const KIT_VERSION = 10;
+  const KIT_VERSION = 11;
 
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
@@ -849,7 +849,7 @@ Load the recall, remember or notes skill for the full steps when a memory task i
 
 ## Cards
 
-Buzz can draw your replies as cards: key numbers, charts, tables, checklists, a profile of a person or company, and buttons to press. Use the cards skill when a reply is mainly numbers, a comparison, a status or a list, and to ask before anything that can't be undone or that others will see. The \`make_card\` tool on the \`kybernesis\` server builds the exact message for you.
+Buzz can draw your replies as cards: key numbers, charts, tables, checklists, a profile of a person or company, and buttons to press. Use the cards skill when a reply is mainly numbers, a comparison, a status or a list, and to ask before anything that can't be undone or that others will see. The \`make_card\` tool on the \`kybernesis\` server builds the exact message for you. Pass the \`message\` it returns to \`send\` exactly as it is, as the text; never rebuild it, write it to a file or add to the hidden line.
 
 ## Pages
 
@@ -882,6 +882,10 @@ description: "Send a card in Buzz instead of plain text: a few key numbers, a tr
 # Cards
 
 Buzz draws a card from a message that carries one in a hidden line. People without the Kybernesis cards plugin read the plain text above the line, so that text must stand on its own.
+
+## The quick way
+
+Call \`make_card\` on the \`kybernesis\` server with the card type, data and any buttons. It returns \`message\`: send that exact string as your reply text. Don't rebuild it, write it to a file, or edit the hidden line. Write the card yourself (below) only if the tool is missing.
 
 ## How a card message looks
 
