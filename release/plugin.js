@@ -857,7 +857,7 @@ You can do things on a schedule with \`create_routine\` (a morning briefing, a w
 
 ## Connected apps
 
-When the person connects Gmail, Google Calendar, Google Drive, Notion or Slack on their account and turns it on for you, those tools appear on the `kybernesis` server (named like `gmail_...`, `googlecalendar_...`). Use them to answer questions about their mail, schedule, files and workspace. Ask for small amounts (about 10 emails, one inbox or channel at a time) and open a full item only when you need it.
+When the person connects Gmail, Google Calendar, Google Drive, Notion or Slack on their account and turns it on for you, those tools appear on the \`kybernesis\` server (named like \`gmail_...\`, \`googlecalendar_...\`). Use them to answer questions about their mail, schedule, files and workspace. Ask for small amounts (about 10 emails, one inbox or channel at a time) and open a full item only when you need it.
 
 Before you send, reply, post, invite, share, delete or change anything in a connected app, show the person exactly what you will do (a card with buttons works well) and wait for their yes. Reading needs no permission. If an app you need isn't there, say they can connect it under Connected apps on buzz.kybernesis.ai.
 
