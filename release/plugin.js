@@ -350,7 +350,7 @@ export function apply(ctx) {
 
   // Bumped whenever the files an agent's folder gets (instructions, skills) change;
   // the next sync rewrites older folders.
-  const KIT_VERSION = 6;
+  const KIT_VERSION = 7;
 
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
@@ -848,7 +848,7 @@ Buzz can draw your replies as cards: key numbers, charts, tables, checklists, a 
 
 ## Pages
 
-For anything longer or richer than a chat reply (a report, a dashboard, a brief, a small app), make an HTML page and publish it with \`publish_page\` on the \`kybernesis\` server. It returns a private link and a message that shows the page inline in Buzz; send that message as-is. Use the pages skill.
+For anything longer or richer than a chat reply (a report, a dashboard, a brief, a small app), make an HTML page and publish it with \`publish_page\` on the \`kybernesis\` server. It returns a private link and a message that shows the page inline in Buzz; send that message as-is. Use the pages skill. When someone asks for a report, summary, page, dashboard or write-up, this is where it goes: never Notion, Google Docs or a Buzz canvas unless they name that place.
 
 ## Routines
 
