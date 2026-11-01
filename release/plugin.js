@@ -350,7 +350,7 @@ export function apply(ctx) {
 
   // Bumped whenever the files an agent's folder gets (instructions, skills) change;
   // the next sync rewrites older folders.
-  const KIT_VERSION = 3;
+  const KIT_VERSION = 4;
 
   const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
@@ -810,6 +810,9 @@ export function apply(ctx) {
       { path: ".claude/skills/notes/SKILL.md", text: NOTES_SKILL },
       { path: ".claude/skills/cards/SKILL.md", text: CARDS_SKILL },
       { path: ".claude/skills/pages/SKILL.md", text: PAGES_SKILL },
+      { path: ".claude/skills/build/SKILL.md", text: BUILD_SKILL },
+      { path: ".claude/skills/ship/SKILL.md", text: SHIP_SKILL },
+      { path: ".claude/skills/documents/SKILL.md", text: DOCUMENTS_SKILL },
     ];
   }
 
@@ -849,6 +852,10 @@ For anything longer or richer than a chat reply (a report, a dashboard, a brief,
 ## Routines
 
 You can do things on a schedule with \`create_routine\` (a morning briefing, a weekly summary). Agree the name and time with the person first. When a message starts with "Routine:", it comes from one of your routines: do the task and reply in that conversation. Routines run while Buzz is open on the person's Mac.
+
+## Building and documents
+
+You run on the person's Mac and can build things: websites, apps, scripts and tools (build skill), put them live after the person says yes (ship skill), and make or read Word documents, PDFs, spreadsheets and slide decks (documents skill). Keep your work inside your folder unless the person names another place, and ask before installing anything.
 `;
   }
 
@@ -908,6 +915,144 @@ description: "Make a page: a report, dashboard, brief, plan, comparison or one-p
 5. To change a page, call \`publish_page\` again with its \`page_id\`; the link stays the same. \`list_pages\` shows what you have published. Delete a page only when the person asks.
 
 Anyone with the link can open the page, so don't put anything in it the person wouldn't want shared.
+`;
+
+  const BUILD_SKILL = `---
+description: "Build software on this Mac: a website, app, dashboard, script or tool, from scratch or in an existing project. Use whenever writing or changing code: set up the project, run it, check it, and look at it before saying it is done."
+---
+
+# Build
+
+You run on the person's own Mac. Their files, their accounts, their machine: act like a careful guest.
+
+## Before you start
+
+1. Agree what you are building in a sentence or two. If the ask is thin, take the most reasonable reading and say what you assumed.
+2. Look up the project in your memory (\`arcana_recall\` on its name). An earlier decision may already settle the stack or the approach.
+3. Check the tools: \`node -v\`, \`npm -v\`, \`git --version\`. If one is missing, say what is missing and how to get it (Node from nodejs.org or \`brew install node\`), and ask before installing anything.
+4. New projects go in \`projects/<name>\` inside your folder unless the person names a place. Never touch files outside the project without asking.
+
+## Default stack
+
+A website or app: Next.js + TypeScript + Tailwind, scaffolded without prompts:
+
+\`\`\`
+npx create-next-app@latest <name> --ts --tailwind --eslint --app --no-src-dir --import-alias "@/*" --yes
+\`\`\`
+
+A small script: plain Node or Python, no framework. Add a dependency only when you could defend it.
+
+## The loop (every change)
+
+1. Change: small, coherent edits.
+2. Check: typecheck and tests (\`npm run typecheck\`, \`npm test\`, or the project's own). Never move on past red.
+3. Run: start servers in the background with a log, never in the foreground (a foreground server hangs you):
+   \`\`\`
+   nohup npm run dev > .dev.log 2>&1 &
+   curl -s -o /dev/null -w "%{http_code}" http://localhost:3000
+   \`\`\`
+   Retry the curl for a few seconds until it answers 200. If the server dies, read \`.dev.log\` first. Stop the servers you started when you finish.
+4. Look: take a screenshot and open it with your file reading tool, then judge the pixels.
+   - With Google Chrome installed: \`"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --hide-scrollbars --window-size=1280,900 --screenshot=/tmp/shot.png http://localhost:3000\`
+   - Otherwise: \`npx playwright screenshot --viewport-size=1280,900 http://localhost:3000 /tmp/shot.png\` (the first run downloads a browser; say so first).
+   - Check a phone width too (390,844). Is anything clipped, overlapping or unreadable? Debug text left in? Fix and look again.
+
+Done means: checks pass, it runs without errors, and you have looked at it at desktop and phone width. "The code looks right" is not done.
+
+## Showing the person
+
+Tell them where it is and how to open it (\`http://localhost:3000\` while it runs, or the folder path). For something they will look at more than once, a page (pages skill) or a card with a screenshot summary works well. Say what you ran and what passed.
+
+## Git
+
+- Start every new project with \`git init\` and a first commit of the clean scaffold.
+- On someone's existing repo: a branch per task (\`agent/<short-name>\`), never commit straight to main, never force-push, never rewrite history.
+- Commit at each green point with a message that says what and why. Check the diff for \`.env\` files, keys and passwords before every commit.
+- Push or open pull requests only with the person's own git setup, and only when they asked.
+
+## Remember the work
+
+Save decisions and their reasons as a note (notes skill), and the project's state at the end of a session with \`arcana_remember\` ("Recipe site: search done, checkout next, in projects/recipes"). Next time you start from there.
+
+For putting it live, use the ship skill.
+`;
+
+  const SHIP_SKILL = `---
+description: "Put something you built live on the internet: a preview link first, then production only after the person says yes. Use when asked to deploy, publish, launch, release or make it live."
+---
+
+# Ship
+
+Putting something live is visible to the world and uses the person's accounts. A preview is yours to make; production is the person's call, every time.
+
+1. Green first: the build skill's loop has passed (checks, runs, looked at). Don't redeploy to re-check something that hasn't changed.
+2. Use what the person already has. Check for a signed-in host before choosing one: \`vercel whoami\`, \`netlify status\`, or a git remote whose pushes deploy. Never create accounts, sign in for them, or ask for passwords or keys in chat. If nothing is set up, say what they would need and stop.
+3. Make a preview: \`vercel\` (not \`--prod\`), or push the branch when the host builds previews from git. Find the preview link.
+4. Look at the preview the way you looked at local: screenshot it at desktop and phone width. A preview can break where local worked (missing settings, build differences).
+5. Ask before production with a card: what goes live, at which address, and buttons such as \`{"label":"Make it live","say":"Yes, make it live","primary":true}\` and \`{"label":"Not yet","say":"Not yet"}\`. Wait for the answer. An earlier "just ship it" does not count; the yes belongs to this moment.
+6. After the yes: deploy to production (\`vercel --prod\`, or merge the way the person said), then open the live address and check it serves the new work.
+7. Remember the ship with \`arcana_remember\`: what went live, when, and the addresses.
+
+Never deploy with failing checks, never change domains, DNS or environment settings without saying exactly what will change and getting a yes, and never spend money (paid plans, domains) without the person's go-ahead.
+`;
+
+  const DOCUMENTS_SKILL = `---
+description: "Make or read documents on this Mac: Word documents, PDFs, spreadsheets, slide decks, letters, proposals, invoices, CVs. Use when someone asks for a file they can open, print, attach to an email or edit, or shares a document for you to read."
+---
+
+# Documents
+
+Files you make stay on the person's Mac. Save them in \`files/\` in your folder (make it if needed) with a clear name (\`acme-proposal-2026-11.docx\`), and tell the person the full path. Don't open windows on their screen unless they ask; if they do, \`open <path>\` opens the file and \`open -R <path>\` shows it in Finder.
+
+If the person wants something to look at or share as a link rather than a file, a page is usually better (pages skill).
+
+## Write the content first
+
+Draft the whole document as clean HTML with inline CSS: a title, headings, short paragraphs, real tables for numbers. Get the words right before converting. Use memory for names, dates and details; never invent figures.
+
+## Word (.docx)
+
+macOS converts HTML to Word with no installs:
+
+\`\`\`
+textutil -convert docx -output files/<name>.docx /tmp/<name>.html
+\`\`\`
+
+Headings, bold, lists, tables and links carry over; keep styling simple (fonts, sizes, colours, borders). Fancy layout does not survive, so don't rely on it.
+
+## PDF
+
+With Google Chrome installed:
+
+\`\`\`
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --no-pdf-header-footer --print-to-pdf=files/<name>.pdf file:///tmp/<name>.html
+\`\`\`
+
+Set the page in CSS: \`@page { size: A4; margin: 18mm }\` (or \`size: letter\` in the US). Use \`break-before: page\` for new pages. Without Chrome, make the Word file, or publish a page and tell the person they can print it to PDF.
+
+Check every PDF you make: open it with your file reading tool and look at the pages.
+
+## Spreadsheets
+
+A \`.csv\` opens in Numbers and Excel and is the safe default: one header row, plain numbers (no currency signs inside numbers; say the currency in the header), dates as YYYY-MM-DD. Quote any value containing a comma.
+
+For formatting, formulas or several sheets, check \`python3 -c "import openpyxl"\`. If that works, write an \`.xlsx\` with openpyxl. If not, make the CSV and say formatting needs a library you can install with their OK (\`pip3 install --user openpyxl\`).
+
+## Slide decks
+
+Default: a deck as an HTML page, one \`<section>\` per slide at 16:9, arrow keys to move, published with the pages skill. For a file, print the same HTML to PDF with \`@page { size: 1280px 720px; margin: 0 }\` and one slide per page. For PowerPoint, check \`python3 -c "import pptx"\` and use python-pptx if it is there; otherwise offer the PDF.
+
+A good slide has one idea, a headline that says the point, and few words. Numbers go in a chart or a big figure.
+
+## Reading documents
+
+- PDFs and images: open them with your file reading tool.
+- Word, RTF, Pages exports: \`textutil -convert txt -stdout <file>\`.
+- CSV: read it directly. Excel: \`python3\` with openpyxl if available, otherwise ask for a CSV export.
+
+Summarise what matters, and save key facts or a note to memory when the document is something you will need again.
+
+Never put passwords, bank details or ID numbers in a document unless the person gave them for exactly that document.
 `;
 
   const RECALL_SKILL = `---
