@@ -100,6 +100,8 @@ const CSS = `
 .kyb .plan li::before { content:"+"; position:absolute; left:0; font-family:var(--mono); color:var(--em); }
 .kyb .plan.off li::before { color:var(--muted); }
 .kyb .plan .btn { justify-content:center; margin-top:auto; }
+.kyb .plan li strong { font-weight:600; color:var(--ink); }
+.kyb .plan.off li strong { color:var(--muted); }
 .kyb .tag { align-self:flex-start; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; padding:3px 7px; border:1px solid var(--line2); color:var(--ink3); }
 .kyb .tag.em { border-color:var(--em); color:var(--em); }
 .kyb .fine { margin-top:28px; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
@@ -610,28 +612,30 @@ export function apply(ctx) {
         "div",
         { className: "plan main" },
         h("span", { className: "tag em" }, "Available now"),
-        h("div", null, h("h2", null, "Buzz agent"), h("p", { className: "small muted", style: { margin: "6px 0 0" } }, "Runs on your Mac inside Buzz, on your own Claude plan.")),
+        h("div", null, h("h2", null, "Kybernesis Buzz Agent"), h("p", { className: "small muted", style: { margin: "6px 0 0" } }, "A proactive agent that runs on your Mac inside Buzz, on your own Claude plan.")),
         h("div", { className: "price" }, `$${prices.setup}`, h("small", null, ` setup, then $${prices.monthly}/month`)),
         h(
           "ul",
           null,
+          h("li", null, h("strong", null, "Proactive: "), "tells you about important mail and meetings before you ask"),
+          h("li", null, "Runs routines on a schedule, like a morning briefing"),
+          h("li", null, "Connects to hundreds of apps"),
           h("li", null, "Its own memory that lasts"),
-          h("li", null, "Your Gmail, Calendar, Drive, Notion and Slack"),
-          h("li", null, "Pages, cards, routines and heads-ups"),
-          h("li", null, "Answers while Buzz is open"),
+          h("li", null, "Makes pages, reports and cards"),
         ),
-        h("button", { type: "button", className: "btn em big", onClick: onBuzz }, "Create a Buzz agent"),
+        h("button", { type: "button", className: "btn em big", onClick: onBuzz }, "Create my Kybernesis agent"),
       ),
       h(
         "div",
         { className: "plan off", "aria-disabled": "true" },
         h("span", { className: "tag" }, "Coming soon"),
-        h("div", null, h("h2", null, "Remote Buzz agent"), h("p", { className: "small muted", style: { margin: "6px 0 0" } }, "Runs in the cloud, so it answers even when your Mac is off.")),
+        h("div", null, h("h2", null, "Kybernesis Remote Buzz Agent"), h("p", { className: "small muted", style: { margin: "6px 0 0" } }, "A done-for-you agent in the cloud that answers even when your Mac is off.")),
         h("div", { className: "price" }, "Coming soon"),
         h(
           "ul",
           null,
-          h("li", null, "Everything in a Buzz agent"),
+          h("li", null, h("strong", null, "Done for you: "), "we set it up and look after it"),
+          h("li", null, "Everything in a Kybernesis Buzz Agent"),
           h("li", null, "Always on, day and night"),
           h("li", null, "Its own computer and browser"),
         ),
@@ -1041,7 +1045,7 @@ export function apply(ctx) {
                     adding
                       ? h(CreateForm, { first: false, claude, onCreated: created, onCancel: () => setAdding(false) })
                       : h(PlanCards, { onBuzz: () => setAdding(true) }),
-                    h("div", { className: "fine" }, "A Buzz agent answers while Buzz is open on your Mac"),
+                    h("div", { className: "fine" }, "A Kybernesis Buzz Agent answers while Buzz is open on your Mac"),
                   ),
           ),
         ),
