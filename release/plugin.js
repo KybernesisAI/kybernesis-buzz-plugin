@@ -235,12 +235,22 @@ export function apply(ctx) {
 
   // ── Memory ───────────────────────────────────────────────────────────
 
-  async function getMemory() {
+  // Every agent has its own memory, made the first time it is asked for and
+  // the same key after that. No agent can see another's.
+  async function getMemory(pubkey, name) {
     const s = await signIn();
-    const res = await call("/api/memory", { token: s.token });
+    const res = await call("/api/memory", { token: s.token, body: { agent: pubkey, name } });
     if (res.status === 401) throw new Error("Your sign-in ran out. Try again.");
     if (res.status !== 200 || !res.json.key) throw new Error(`Memory isn't available right now (${res.json.error || res.status}).`);
-    return res.json; // { workspace, key, mcpUrl }, the same every time
+    return res.json; // { workspace, key, mcpUrl }
+  }
+
+  async function getMemories(pubkeys) {
+    if (!pubkeys.length) return {};
+    const s = await signIn();
+    const res = await call("/api/memory", { token: s.token, body: { agents: pubkeys } });
+    if (res.status !== 200 || !res.json.grants) throw new Error(`Memory isn't available right now (${res.json.error || res.status}).`);
+    return res.json.grants; // { <pubkey>: { workspace, key, mcpUrl } }
   }
 
   function mcpText(memory) {
@@ -256,23 +266,20 @@ export function apply(ctx) {
     return JSON.stringify(config, null, 2) + "\n";
   }
 
-  // Makes sure every agent folder holds the current memory key.
-  async function syncMemoryKey(memory, agents) {
+  // Writes an agent's own memory key into its folder when it isn't there yet.
+  async function writeMemoryKey(folder, memory) {
     const text = mcpText(memory);
-    for (const agent of agents) {
-      let current = "";
-      try {
-        current = await readText(`${agent.folder}/.mcp.json`);
-      } catch {
-        current = "";
-      }
-      if (current !== text) {
-        try {
-          await writeFile(`${agent.folder}/.mcp.json`, text);
-        } catch {
-          // A folder the person deleted; nothing to update.
-        }
-      }
+    let current = "";
+    try {
+      current = await readText(`${folder}/.mcp.json`);
+    } catch {
+      current = "";
+    }
+    if (current === text) return;
+    try {
+      await writeFile(`${folder}/.mcp.json`, text);
+    } catch {
+      // A folder the person deleted; nothing to update.
     }
   }
 
@@ -336,7 +343,7 @@ export function apply(ctx) {
   const slugify = (name) =>
     name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "agent";
 
-  const STEPS = ["Sign in with your Buzz identity", "Set up its memory", "Write its folder", "Check its memory", "Create the agent"];
+  const STEPS = ["Sign in with your Buzz identity", "Write its folder", "Create the agent", "Set up its own memory", "Check its memory"];
 
   async function createAgent({ name, role, focus }, step) {
     if (!name) throw new Error("Give your agent a name first.");
@@ -344,24 +351,18 @@ export function apply(ctx) {
     if (!claude.ready) throw new Error(claude.label);
     step(0);
     const s = await signIn();
-    step(1);
-    const memory = await getMemory();
 
-    step(2);
+    step(1);
     const agents = await loadAgents();
     const home = await homeDir();
     let slug = slugify(name);
     for (let n = 2; agents.some((a) => a.folder === `${home}/agents/${slug}`); n++) slug = `${slugify(name)}-${n}`;
     const folder = `${home}/agents/${slug}`;
     for (const file of agentFiles({ name, role, focus })) await writeFile(`${folder}/${file.path}`, file.text);
-    await writeFile(`${folder}/.mcp.json`, mcpText(memory));
-    await syncMemoryKey(memory, agents);
 
-    step(3);
-    const health = await checkMemory(folder);
-    if (!health.ok) throw new Error(`Its memory didn't answer (${health.detail}). Try again.`);
-
-    step(4);
+    // The agent comes first because its own memory is named after its Buzz key.
+    // It doesn't run until someone messages it, so the key is in place by then.
+    step(2);
     const created = await ctx.agents.create({
       type: CLAUDE_TYPE,
       name,
@@ -375,9 +376,19 @@ export function apply(ctx) {
       },
     });
     const now = new Date().toISOString();
-    const entry = { name, role, focus, picture: AVATAR, folder, pubkey: created.pubkey, workspace: memory.workspace, createdAt: now, syncedAt: now };
+    const entry = { name, role, focus, picture: AVATAR, folder, pubkey: created.pubkey, createdAt: now, syncedAt: now };
     await saveAgents([...agents, entry]);
     await call("/api/agents", { token: s.token, body: { id: created.pubkey, name, role, focus, picture: AVATAR } });
+
+    step(3);
+    const memory = await getMemory(created.pubkey, name);
+    await writeFile(`${folder}/.mcp.json`, mcpText(memory));
+    entry.workspace = memory.workspace;
+    await saveAgents([...agents, entry]);
+
+    step(4);
+    const health = await checkMemory(folder);
+    if (!health.ok) throw new Error(`${name} is created, but its memory didn't answer (${health.detail}). Reopen Kybernesis to try again.`);
     step(5);
     return entry;
   }
@@ -391,8 +402,6 @@ export function apply(ctx) {
     const agents = await loadAgents();
     if (!agents.length) return agents;
     const s = await signIn();
-    const memory = await getMemory();
-    await syncMemoryKey(memory, agents);
     const res = await call("/api/agents", { method: "GET", token: s.token });
     if (res.status !== 200) return agents;
     const remote = new Map((res.json.agents || []).map((a) => [a.id, a]));
@@ -427,6 +436,18 @@ export function apply(ctx) {
       }
       next.push(updated);
       changed = true;
+    }
+    // Each agent's own memory key, after every agent is registered, so the
+    // memory from before memories were per agent stays with the oldest one.
+    const grants = await getMemories(next.filter((a) => a.pubkey).map((a) => a.pubkey));
+    for (const [i, agent] of next.entries()) {
+      const memory = agent.pubkey && grants[agent.pubkey];
+      if (!memory) continue;
+      await writeMemoryKey(agent.folder, memory);
+      if (agent.workspace !== memory.workspace) {
+        next[i] = { ...agent, workspace: memory.workspace };
+        changed = true;
+      }
     }
     if (changed) await saveAgents(next);
     return next;
