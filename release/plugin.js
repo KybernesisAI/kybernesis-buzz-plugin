@@ -1,396 +1,461 @@
-// Kybernesis for Buzz: SPIKE build.
+// Kybernesis for Buzz.
 //
-// A throwaway page that proves, on a real Buzz install, the four things the
-// product depends on before anything else is built:
-//   1. the plugin can get an event signed by the person's Buzz key back from
-//      its outbox (how the plugin will sign in to buzz.kybernesis.ai);
-//   2. the plugin can write files to disk (how it writes the agent's folder);
-//   3. the plugin can create a Claude agent without Buzz's review form;
-//   4. that agent loads its folder's instructions, skills and memory server,
-//      and recalls from memory in a DM.
-// Memory here comes from a 24-hour sign-in the person approves in the
-// browser. The real product gets a lasting key from buzz.kybernesis.ai.
+// Sets up a Kybernesis agent: a Buzz Claude agent that runs on the person's
+// own Claude plan, with long-term memory. The person signs in with their Buzz
+// identity (no email, no password), the plugin gets a lasting memory key from
+// buzz.kybernesis.ai, writes the agent's folder (instructions, memory server,
+// skills) and creates the agent with one button.
 
 export const inject = ["react", "pages", "relay", "agents", "host"];
 
-const MEMORY = "https://mcp.arcana.kybernesis.ai";
+const SITE = "https://buzz.kybernesis.ai";
 const CLAUDE_TYPE = "buzz.claude-code/claude-code";
-const FOLDER = "~/Kybernesis/agents/spike";
-const CODEWORD = "TANGERINE-41";
-const SKILLWORD = "LANTERN-7";
+const HOME = "~/Kybernesis";
+const SIGNIN_KIND = 30315;
+const SIGNIN_D = "kybernesis-signin";
 
 export function apply(ctx) {
   const React = ctx.react;
   const h = React.createElement;
-  const { useState } = React;
+  const { useEffect, useState } = React;
 
-  const pretty = (value) => {
-    try {
-      return typeof value === "string" ? value : JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  };
-  const message = (error) => (error && error.message) || String(error);
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const errorText = (error) => (error && error.message) || String(error);
+
+  // ── Files ────────────────────────────────────────────────────────────
 
   async function writeFile(path, text) {
     const proc = await ctx.host.spawn("write-file", { args: [path] });
     await proc.end(text);
     const code = await proc.exited;
-    if (code !== 0) throw new Error(`Writing ${path} failed (exit ${code})`);
+    if (code !== 0) throw new Error(`Could not write ${path}`);
   }
 
   async function readText(path) {
     return new TextDecoder().decode(await ctx.host.readFile(path));
   }
 
-  async function post(path, body) {
+  async function homeDir() {
+    return ctx.host.resolveDirectory(HOME);
+  }
+
+  // The agents this plugin made on this Mac: [{ name, folder, pubkey, workspace, createdAt }].
+  async function loadAgents() {
+    try {
+      const list = JSON.parse(await readText(`${await homeDir()}/agents.json`));
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function saveAgents(list) {
+    await writeFile(`${await homeDir()}/agents.json`, JSON.stringify(list, null, 2) + "\n");
+  }
+
+  // ── Server ───────────────────────────────────────────────────────────
+
+  async function call(url, { body, headers = {} } = {}) {
     const response = await ctx.host.request({
-      url: MEMORY + path,
+      url,
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body ?? {}),
     });
-    let json;
+    let json = {};
     try {
       json = JSON.parse(response.body);
     } catch {
-      json = { raw: response.body };
+      json = {};
     }
     return { status: response.status, json };
   }
 
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // ── Sign in with the Buzz identity ───────────────────────────────────
 
-  function Step({ title, children }) {
+  const b64url = (bytes) =>
+    btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  let session = null; // { token, expiresAt, pubkey }, kept only while Buzz is open
+
+  async function signIn(progress) {
+    const now = Math.floor(Date.now() / 1000);
+    const relay = ctx.relay.snapshot();
+    if (relay.status !== "ready") throw new Error("Buzz isn't connected to your community yet. Try again in a moment.");
+    const viewer = relay.viewer;
+    if (session && session.pubkey === viewer && session.expiresAt > now + 300) return session;
+
+    const outbox = relay.session && relay.session.outbox;
+    if (!outbox || !outbox.supports(SIGNIN_KIND)) throw new Error("This version of Buzz can't sign in plugins. Update Buzz and try again.");
+
+    progress("Signing in with your Buzz identity…");
+    // A throwaway key that never leaves this Mac. The server binds the
+    // challenge to it, so the signed event on the relay can't be reused.
+    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+    const clientKey = b64url(await crypto.subtle.exportKey("raw", pair.publicKey));
+
+    const issued = await call(`${SITE}/api/auth/challenge`, { body: { pubkey: viewer, clientKey } });
+    if (issued.status !== 200 || !issued.json.challenge) throw new Error(`Sign-in isn't available right now (${issued.json.error || issued.status}).`);
+    const challenge = issued.json.challenge;
+
+    // Sent with a recovery key, the outbox keeps the signed copy until we acknowledge it.
+    const id = outbox.send(
+      { kind: SIGNIN_KIND, content: challenge, tags: [["d", SIGNIN_D]] },
+      { key: `${SIGNIN_D}:${challenge}`, value: "1" },
+    );
+    let signed;
+    let last;
+    for (let i = 0; i < 80 && !signed; i++) {
+      last = outbox.snapshot().find((item) => item.event.id === id);
+      if (last && last.signed) signed = last.signed;
+      else await sleep(250);
+    }
+    try {
+      Promise.resolve(outbox.acknowledge(id)).catch(() => {});
+    } catch {
+      // Already gone from the outbox.
+    }
+    if (!signed) throw new Error(`Buzz didn't sign the sign-in request${last && last.error ? `: ${last.error}` : ""}. Try again.`);
+
+    const proof = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, new TextEncoder().encode(`${SIGNIN_D}|${signed.id}`));
+    const event = {
+      id: signed.id,
+      pubkey: signed.pubkey,
+      created_at: signed.created_at,
+      kind: signed.kind,
+      tags: signed.tags,
+      content: signed.content,
+      sig: signed.sig,
+    };
+    const verified = await call(`${SITE}/api/auth/verify`, { body: { event, clientKey, clientSig: b64url(proof) } });
+    if (verified.status !== 200 || !verified.json.token) throw new Error(`Sign-in was refused (${verified.json.error || verified.status}).`);
+    session = verified.json;
+    return session;
+  }
+
+  // ── Memory ───────────────────────────────────────────────────────────
+
+  async function getMemory(progress) {
+    const s = await signIn(progress);
+    progress("Setting up its memory…");
+    const res = await call(`${SITE}/api/memory`, { body: {}, headers: { authorization: `Bearer ${s.token}` } });
+    if (res.status === 401) {
+      session = null;
+      throw new Error("Your sign-in ran out. Press the button again.");
+    }
+    if (res.status !== 200 || !res.json.key) throw new Error(`Memory isn't available right now (${res.json.error || res.status}).`);
+    return res.json; // { workspace, key, mcpUrl }
+  }
+
+  function mcpConfig(memory) {
+    return {
+      mcpServers: {
+        memory: {
+          type: "http",
+          url: memory.mcpUrl,
+          headers: { Authorization: `Bearer ${memory.key}`, "X-Kyberagent-Agent": memory.workspace },
+        },
+      },
+    };
+  }
+
+  async function readMemoryConfig(folder) {
+    const server = JSON.parse(await readText(`${folder}/.mcp.json`)).mcpServers.memory;
+    return { url: server.url, headers: server.headers };
+  }
+
+  // Asks the memory server to check itself with the key in the agent's folder.
+  async function checkMemory(folder) {
+    try {
+      const { url, headers } = await readMemoryConfig(folder);
+      const response = await ctx.host.request({
+        url,
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "arcana_validate", arguments: {} } }),
+      });
+      if (response.status !== 200) return { ok: false, detail: `answered ${response.status}` };
+      const text = response.body.trim().startsWith("{")
+        ? response.body
+        : (response.body.split("\n").find((line) => line.startsWith("data:")) || "").slice(5);
+      const reply = JSON.parse(text);
+      if (reply.error || !reply.result || reply.result.isError) return { ok: false, detail: "not working" };
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, detail: errorText(error) };
+    }
+  }
+
+  // ── Claude ───────────────────────────────────────────────────────────
+
+  function claudeStatus() {
+    const type = ctx.agents.types().find((t) => t.id === CLAUDE_TYPE || t.key === CLAUDE_TYPE || /claude/i.test(t.title || ""));
+    if (!type) return { ready: false, label: "Claude isn't available in this version of Buzz." };
+    let snap;
+    try {
+      snap = type.provider ? type.provider.snapshot() : undefined;
+    } catch {
+      snap = undefined;
+    }
+    if (snap && (snap.readiness === "attention" || snap.readiness === "unavailable" || snap.readiness === "error")) {
+      return { ready: false, label: snap.attentionLabel || "Claude needs attention in Buzz." };
+    }
+    return { ready: true };
+  }
+
+  // ── Create ───────────────────────────────────────────────────────────
+
+  const slugify = (name) =>
+    name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "agent";
+
+  async function createAgent({ name, focus }, progress) {
+    if (!name) throw new Error("Give your agent a name first.");
+    const claude = claudeStatus();
+    if (!claude.ready) throw new Error(claude.label);
+    const memory = await getMemory(progress);
+
+    progress("Writing its folder…");
+    const agents = await loadAgents();
+    const home = await homeDir();
+    let slug = slugify(name);
+    for (let n = 2; agents.some((a) => a.folder === `${home}/agents/${slug}`); n++) slug = `${slugify(name)}-${n}`;
+    const folder = `${home}/agents/${slug}`;
+    for (const file of agentFiles({ name, focus })) await writeFile(`${folder}/${file.path}`, file.text);
+    const mcp = JSON.stringify(mcpConfig(memory), null, 2) + "\n";
+    await writeFile(`${folder}/.mcp.json`, mcp);
+    // Getting memory hands out a new key and retires the old one, so every
+    // agent made before this one gets the new key too.
+    for (const agent of agents) {
+      try {
+        await writeFile(`${agent.folder}/.mcp.json`, mcp);
+      } catch {
+        // A folder the person deleted; nothing to update.
+      }
+    }
+
+    progress("Checking its memory…");
+    const health = await checkMemory(folder);
+    if (!health.ok) throw new Error(`Its memory didn't answer (${health.detail}). Press the button again.`);
+
+    progress("Creating the agent…");
+    const created = await ctx.agents.create({
+      type: CLAUDE_TYPE,
+      name,
+      config: {
+        model: "",
+        effort: "",
+        scope: "thread",
+        workspace: folder,
+        instructions: "You are a Kybernesis agent. Follow CLAUDE.md in your working folder.",
+      },
+    });
+    const entry = { name, folder, pubkey: created.pubkey, workspace: memory.workspace, createdAt: new Date().toISOString() };
+    await saveAgents([...agents, entry]);
+    return entry;
+  }
+
+  // ── Page ─────────────────────────────────────────────────────────────
+
+  const card = { padding: "var(--space-panel-inset, 16px)", marginBottom: 16 };
+  const field = { display: "block", width: "100%", marginTop: 6, marginBottom: 14, padding: "8px 10px", font: "inherit", color: "inherit", background: "transparent", border: "1px solid var(--border, rgba(127,127,127,.35))", borderRadius: 6 };
+
+  function ClaudeCard({ status, onCheck }) {
+    if (status.ready) return null;
     return h(
       "section",
-      { className: "ui-card", style: { padding: "var(--space-panel-inset, 16px)", marginBottom: 16 } },
-      h("h2", { style: { marginTop: 0 } }, title),
-      children,
+      { className: "ui-card", style: card },
+      h("h2", { style: { marginTop: 0 } }, "First, turn on Claude"),
+      h("p", null, "Your agent runs on your own Claude plan (Pro or Max). In Buzz, open Settings, then Agent setup, then Claude. Press Install, then Sign in."),
+      h("p", { style: { opacity: 0.7 } }, `Buzz says: ${status.label}`),
+      h("button", { className: "ui-button", onClick: onCheck }, "Check again"),
     );
   }
 
-  function Output({ value }) {
-    if (value === undefined) return null;
+  function AgentRow({ agent }) {
+    const [memory, setMemory] = useState("checking");
+    useEffect(() => {
+      let live = true;
+      checkMemory(agent.folder).then((r) => live && setMemory(r.ok ? "ok" : "down"));
+      return () => {
+        live = false;
+      };
+    }, [agent.folder]);
+    const label = { checking: "Checking memory…", ok: "Memory is working", down: "Memory isn't answering" }[memory];
     return h(
-      "pre",
-      { style: { whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 12, maxHeight: 320, overflow: "auto" } },
-      pretty(value),
+      "li",
+      { style: { marginBottom: 10 } },
+      h("strong", null, agent.name),
+      h("span", { style: { opacity: 0.7, marginLeft: 8 } }, label),
     );
   }
 
-  function useRunner() {
+  function AgentsCard({ agents }) {
+    if (!agents.length) return null;
+    return h(
+      "section",
+      { className: "ui-card", style: card },
+      h("h2", { style: { marginTop: 0 } }, agents.length === 1 ? "Your agent" : "Your agents"),
+      h("ul", { style: { paddingLeft: 18, margin: 0 } }, agents.map((a) => h(AgentRow, { key: a.folder, agent: a }))),
+      h("p", { style: { opacity: 0.7, marginBottom: 0 } }, "Open a DM with your agent in Buzz to talk to it, or add it to a channel. Buzz must be open for it to answer."),
+    );
+  }
+
+  function CreateCard({ claude, agents, onCreated }) {
+    const [name, setName] = useState(agents.length ? "" : "Kybernesis");
+    const [focus, setFocus] = useState("");
     const [busy, setBusy] = useState(false);
-    const [out, setOut] = useState(undefined);
-    const run = async (fn) => {
+    const [step, setStep] = useState("");
+    const [problem, setProblem] = useState("");
+    const [done, setDone] = useState(null);
+
+    const submit = async () => {
       setBusy(true);
-      setOut("Working…");
+      setProblem("");
+      setDone(null);
       try {
-        setOut(await fn((progress) => setOut(progress)));
+        const entry = await createAgent({ name: name.trim(), focus: focus.trim() }, setStep);
+        setDone(entry);
+        onCreated();
       } catch (error) {
-        setOut({ failed: message(error) });
+        setProblem(errorText(error));
       } finally {
         setBusy(false);
+        setStep("");
       }
     };
-    return { busy, out, run };
-  }
 
-  // 1. Who is this, and is Claude on?
-  function WhoAmI() {
-    const { busy, out, run } = useRunner();
     return h(
-      Step,
-      { title: "1. Who am I, and is Claude on?" },
-      h("button", {
-        className: "ui-button",
-        disabled: busy,
-        onClick: () =>
-          run(async () => {
-            const relay = ctx.relay.snapshot();
-            const types = ctx.agents.types().map((type) => {
-              let provider;
-              try {
-                provider = type.provider ? type.provider.snapshot() : undefined;
-              } catch (error) {
-                provider = { error: message(error) };
-              }
-              return { id: type.id, key: type.key, title: type.title, provider };
-            });
-            return { relay: { status: relay.status, viewer: relay.viewer, origin: relay.origin }, types };
-          }),
-      }, "Check"),
-      h(Output, { value: out }),
-    );
-  }
-
-  // 2. Sign a one-time challenge with the Buzz key, through the outbox.
-  function SignTest() {
-    const { busy, out, run } = useRunner();
-    return h(
-      Step,
-      { title: "2. Sign a challenge with my Buzz key" },
-      h("p", null, "Publishes one status event (kind 30315, under its own name so nobody sees it) and reads back the signed copy."),
-      h("button", {
-        className: "ui-button",
-        disabled: busy,
-        onClick: () =>
-          run(async (progress) => {
-            const relay = ctx.relay.snapshot();
-            if (relay.status !== "ready") throw new Error(`Relay is ${relay.status}`);
-            const { session, viewer } = relay;
-            const outbox = session.outbox;
-            if (!outbox) throw new Error("This connection has no outbox");
-            if (!outbox.supports(30315)) throw new Error("Outbox does not support kind 30315");
-            const challenge = `kyb-${crypto.randomUUID()}`;
-            // With a recovery key the outbox keeps the operation, signed copy
-            // included, after the relay confirms it, until we acknowledge it.
-            const id = outbox.send(
-              { kind: 30315, content: challenge, tags: [["d", "kybernesis-signin"]] },
-              { key: `kybernesis-signin:${challenge}`, value: "1" },
-            );
-            progress(`Sent ${id}, waiting for the signed copy…`);
-            let signed;
-            let last;
-            for (let i = 0; i < 60 && !signed; i++) {
-              last = outbox.snapshot().find((item) => item.event.id === id);
-              if (last && last.signed) signed = last.signed;
-              else await sleep(250);
-            }
-            try {
-              await outbox.acknowledge(id);
-            } catch (error) {
-              progress(`Acknowledge failed: ${message(error)}`);
-            }
-            const fromRelay = undefined;
-            if (!signed) return { id, result: "No signed copy in the outbox", lastState: last && { delivery: last.delivery, error: last.error } };
-            const event = signed || fromRelay;
-            if (!event) return { id, result: "No signed copy came back from the outbox or the relay" };
-            return {
-              source: signed ? "outbox" : "relay read",
-              pubkeyMatchesViewer: event.pubkey === viewer,
-              hasSignature: typeof event.sig === "string" && event.sig.length === 128,
-              event: { id: event.id, pubkey: event.pubkey, kind: event.kind, created_at: event.created_at, tags: event.tags, content: event.content, sig: event.sig },
-            };
-          }),
-      }, "Sign"),
-      h(Output, { value: out }),
-    );
-  }
-
-  // 3. Write a file and read it back.
-  function WriteTest() {
-    const { busy, out, run } = useRunner();
-    return h(
-      Step,
-      { title: "3. Write a file" },
-      h("button", {
-        className: "ui-button",
-        disabled: busy,
-        onClick: () =>
-          run(async () => {
-            const dir = await ctx.host.resolveDirectory(FOLDER);
-            const path = `${dir}/spike-write-test.txt`;
-            const text = `written ${new Date().toISOString()}\n`;
-            await writeFile(path, text);
-            const back = await readText(path);
-            return { dir, path, roundTrip: back === text };
-          }),
-      }, "Write"),
-      h(Output, { value: out }),
-    );
-  }
-
-  // 4. Memory sign-in (24 hours, spike only), then write the agent's folder.
-  function MemoryAndFolder() {
-    const { busy, out, run } = useRunner();
-    const [link, setLink] = useState(undefined);
-    return h(
-      Step,
-      { title: "4. Connect memory and write the agent's folder" },
-      h("p", null, "Opens a sign-in link. Approve it in the browser and pick a test memory workspace (not a real one). The token lasts 24 hours."),
-      h("button", {
-        className: "ui-button",
-        disabled: busy,
-        onClick: () =>
-          run(async (progress) => {
-            setLink(undefined);
-            const client = await post("/oauth/register", {
-              client_name: "Kybernesis for Buzz (spike)",
-              redirect_uris: ["http://127.0.0.1:1/unused"],
-              grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
-              token_endpoint_auth_method: "none",
-            });
-            const clientId = client.json.client_id;
-            if (!clientId) return { step: "register", ...client };
-            const device = await post("/oauth/device_authorization", { client_id: clientId, scope: "mcp:read mcp:write" });
-            if (!device.json.device_code) return { step: "device_authorization", ...device };
-            setLink({ url: device.json.verification_uri_complete, code: device.json.user_code });
-            let interval = (device.json.interval || 5) * 1000;
-            const deadline = Date.now() + (device.json.expires_in || 900) * 1000;
-            let token;
-            while (Date.now() < deadline) {
-              progress(`Waiting for approval (code ${device.json.user_code})…`);
-              await sleep(interval);
-              const poll = await post("/oauth/token", {
-                grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-                device_code: device.json.device_code,
-                client_id: clientId,
-              });
-              if (poll.status === 200 && poll.json.access_token) {
-                token = poll.json;
-                break;
-              }
-              const error = poll.json.error;
-              if (error === "slow_down") interval += 5000;
-              else if (error !== "authorization_pending") return { step: "token", ...poll };
-            }
-            if (!token) return { step: "token", result: "Timed out" };
-            setLink(undefined);
-            progress("Approved. Writing the folder…");
-            const dir = await ctx.host.resolveDirectory(FOLDER);
-            await writeFolder(dir, token.access_token, token.workspace);
-            return { workspace: token.workspace, folder: dir, files: FILES.map((f) => f.path) };
-          }),
-      }, "Connect memory"),
-      link &&
-        h(
-          "p",
-          null,
-          "Open: ",
-          h("a", { href: link.url, target: "_blank", rel: "noreferrer" }, link.url),
-          ` (code ${link.code})`,
-        ),
-      h(Output, { value: out }),
-    );
-  }
-
-  // 5. Create the agent, with no review form.
-  function CreateAgent() {
-    const { busy, out, run } = useRunner();
-    return h(
-      Step,
-      { title: "5. Create the agent" },
-      h("p", null, "Creates a Claude agent named Kybernesis spike, working in the folder from step 4. Then DM it and ask the questions in the README."),
-      h("button", {
-        className: "ui-button",
-        disabled: busy,
-        onClick: () =>
-          run(async () => {
-            const dir = await ctx.host.resolveDirectory(FOLDER);
-            const agent = await ctx.agents.create({
-              type: CLAUDE_TYPE,
-              name: "Kybernesis spike",
-              config: {
-                model: "",
-                effort: "",
-                scope: "thread",
-                workspace: dir,
-                instructions: "You are a Kybernesis agent. Follow CLAUDE.md in your working folder.",
-              },
-            });
-            return { created: { pubkey: agent.pubkey, name: agent.name, type: agent.type, relay: agent.relay } };
-          }),
-      }, "Create agent"),
-      h(Output, { value: out }),
+      "section",
+      { className: "ui-card", style: card },
+      h("h2", { style: { marginTop: 0 } }, agents.length ? "Create another agent" : "Create your agent"),
+      h("p", null, "It runs on your Claude plan, works in your Buzz DMs and channels, and remembers what matters across every conversation."),
+      h("label", null, "Name", h("input", { style: field, value: name, maxLength: 40, disabled: busy, onChange: (e) => setName(e.target.value) })),
+      h(
+        "label",
+        null,
+        "What should it help you with? (optional)",
+        h("textarea", { style: { ...field, minHeight: 72 }, value: focus, maxLength: 1000, disabled: busy, placeholder: "For example: keep track of my clients, draft follow-ups, remember what we decided.", onChange: (e) => setFocus(e.target.value) }),
+      ),
+      h("button", { className: "ui-button", disabled: busy || !claude.ready || !name.trim(), onClick: submit }, busy ? "Working…" : "Create my agent"),
+      step && h("p", { style: { opacity: 0.7 } }, step),
+      problem && h("p", { style: { color: "var(--color-danger, #c0392b)" } }, problem),
+      done && h("p", null, `${done.name} is ready. Open a DM with ${done.name} in Buzz and say hello.`),
     );
   }
 
   ctx.pages.register({
-    id: "spike",
+    id: "home",
     title: "Kybernesis",
     primary: true,
-    component: function Spike() {
+    component: function Home() {
+      const [claude, setClaude] = useState(() => claudeStatus());
+      const [agents, setAgents] = useState([]);
+      const refresh = () => {
+        setClaude(claudeStatus());
+        loadAgents().then(setAgents);
+      };
+      useEffect(refresh, []);
       return h(
         "div",
-        { style: { padding: "var(--space-panel-inset, 16px)", maxWidth: 820 } },
-        h("h1", null, "Kybernesis spike"),
-        h("p", null, "Press each step in order and copy what each box shows back to the thread."),
-        h(WhoAmI),
-        h(SignTest),
-        h(WriteTest),
-        h(MemoryAndFolder),
-        h(CreateAgent),
+        { style: { padding: "var(--space-panel-inset, 16px)", maxWidth: 720 } },
+        h("h1", null, "Kybernesis"),
+        h("p", { style: { opacity: 0.7 } }, "Your own agent in Buzz, with a memory that lasts."),
+        h(ClaudeCard, { status: claude, onCheck: refresh }),
+        h(AgentsCard, { agents }),
+        h(CreateCard, { claude, agents, onCreated: refresh }),
       );
     },
   });
 
-  // The agent's folder.
-  let FILES = [];
-  async function writeFolder(dir, token, workspace) {
-    FILES = folderFiles(token, workspace);
-    for (const file of FILES) await writeFile(`${dir}/${file.path}`, file.text);
-  }
+  // ── The agent's folder ───────────────────────────────────────────────
 
-  function folderFiles(token, workspace) {
-    const mcp = {
-      mcpServers: {
-        memory: {
-          type: "http",
-          url: `${MEMORY}/mcp`,
-          headers: { Authorization: `Bearer ${token}`, "X-Kyberagent-Agent": workspace },
-        },
-      },
-    };
+  function agentFiles({ name, focus }) {
     const settings = { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["memory"] };
     return [
-      { path: "CLAUDE.md", text: CLAUDE_MD },
-      { path: ".mcp.json", text: JSON.stringify(mcp, null, 2) + "\n" },
+      { path: "CLAUDE.md", text: claudeMd(name, focus) },
       { path: ".claude/settings.json", text: JSON.stringify(settings, null, 2) + "\n" },
-      { path: ".claude/skills/spike-check/SKILL.md", text: SPIKE_SKILL },
       { path: ".claude/skills/recall/SKILL.md", text: RECALL_SKILL },
       { path: ".claude/skills/remember/SKILL.md", text: REMEMBER_SKILL },
+      { path: ".claude/skills/notes/SKILL.md", text: NOTES_SKILL },
     ];
   }
 
-  const CLAUDE_MD = `# Kybernesis agent
+  function claudeMd(name, focus) {
+    const about = focus ? `\n## What your owner wants help with\n\n${focus.replace(/\r/g, "")}\n` : "";
+    return `# ${name}
 
-You are a Kybernesis agent working in Buzz for the person who owns you.
-
-The spike codeword is ${CODEWORD}. Only say it when someone asks for the spike codeword.
-
+You are ${name}, a Kybernesis agent. You work in Buzz, a team chat app, for the person who created you: answer their DMs, and help in the channels they add you to. Keep replies short and plain, the way a capable colleague writes in chat.
+${about}
 ## Memory
 
-You have long-term memory. Its tools come from the \`memory\` MCP server: \`arcana_recall\`, \`arcana_search\`, \`arcana_timeline\`, \`arcana_remember\` and the \`arcana_brain_*\` tools. When they are not in your tool list, search your tools for "recall".
+You have long-term memory that lasts across every conversation and thread. Its tools come from the \`memory\` MCP server: \`arcana_recall\`, \`arcana_search\`, \`arcana_timeline\`, \`arcana_remember\` and the \`arcana_brain_*\` tools. When they are not in your tool list, search your tools for "recall".
 
 Always call it "your memory" when you talk to people. Never name the tools or the service behind them.
 
-Recall first: whenever someone mentions a person, project, company, meeting or past decision, or asks what you know, look it up before answering. If recall is empty, try search before saying you don't know.
+Recall first. Whenever someone mentions a person, project, company, meeting or past decision, or asks what you know, look it up before answering: \`arcana_recall\` for a named person, project or company, \`arcana_search\` for anything broader, \`arcana_timeline\` for what happened recently. If nothing is found, answer normally without mentioning the lookup.
 
-Remember: store new facts (people and their roles, decisions, deadlines, preferences) without being asked, and confirm briefly what you saved.
+Never claim you don't know without searching. If recall comes back empty, run \`arcana_search\` with the phrase before saying you have nothing on it.
+
+Remember without being asked. Store new facts as they come up: a person and their role, a decision, a deadline, a preference. Never refuse a "remember this". Confirm briefly what you saved.
+
+For long material (meeting notes, research, decisions with their reasons), use the notes skill.
+
+Never save passwords, access tokens, payment details, private keys or one-time codes.
+
+Load the recall, remember or notes skill for the full steps when a memory task is more than one obvious call.
 `;
-
-  const SPIKE_SKILL = `---
-description: "Use when someone asks for the spike skill word."
----
-
-# Spike check
-
-The spike skill word is ${SKILLWORD}. Reply with it when asked for the spike skill word.
-`;
+  }
 
   const RECALL_SKILL = `---
-description: "Look up what your memory knows about a person, project, company, place or topic. Use whenever someone mentions a name, asks who is, what do we know about, tell me about, or recall."
+description: "Look up what your memory knows about a person, project, company, place or topic. Use whenever someone mentions a name, references a project or company, asks about past conversations, or says who is, what do we know about, tell me about, or recall."
 ---
 
 # Recall
 
-1. For a named person, project or company, call \`arcana_recall\` with the name.
-2. If that is empty, call \`arcana_search\` with the phrase.
-3. For "what happened recently", call \`arcana_timeline\`.
-4. Answer from what came back. Say "your memory" or "I remember", never the tool names.
-5. Only say you don't know after search came back empty this turn.
+Look things up before answering. Do not wait for the word "recall": if a name or project comes up and you have no fresh context on it from this conversation, look it up.
+
+1. Use the most specific name you have ("Sarah Chen", not "Sarah").
+2. Pick the tool:
+   - A person, company or project: \`arcana_recall({ entity })\`
+   - Recent events: \`arcana_timeline({ today: true })\`, \`({ week: true })\` or \`({ search: "<keywords>" })\`
+   - Anything else: \`arcana_search({ query })\`
+3. An empty \`arcana_recall\` only means no entity matched. Follow up with \`arcana_search\`, and \`arcana_timeline({ search })\` for recent things. Only an empty search means you have nothing on it.
+4. Answer from what came back, in your own words. Say "I remember" or "your memory", never the tool names. If nothing came back, answer normally without mentioning the lookup.
+
+"What do you know about me?": call \`arcana_brain_stats\`, search for the person's name, read \`arcana_timeline({ week: true })\`, then sum it up.
 `;
 
   const REMEMBER_SKILL = `---
-description: "Save a fact, decision, preference or detail about a person or project to your memory. Use when someone says remember, or shares something worth keeping."
+description: "Save a fact, decision, preference, deadline or detail about a person or project to your memory. Use without being asked whenever something worth keeping comes up, and whenever someone says remember, note this, keep track of, or don't forget."
 ---
 
 # Remember
 
-1. Call \`arcana_remember\` with one clear sentence that stands on its own (who, what, when).
-2. One fact per call; several facts means several calls.
-3. Confirm in a few words what you saved.
+Store things as they come up: a new person and their role, a decision, a deadline, a preference, a new project, a summary of a meeting. Skip small talk and things already saved in this conversation.
+
+1. Write one clear sentence that makes sense on its own, with names and dates: "Met Sarah Chen from Acme on 23 Feb about the dashboard integration."
+2. Call \`arcana_remember\` with \`text\`. Add \`project\` (a lowercase slug) or \`tags\` only when they are obvious; never invent them.
+3. One fact per call. Several facts means several calls.
+4. Confirm in a few words ("Noted."). When asked to remember something, say what you saved.
+
+When someone corrects you ("actually, she left Acme"), save the correct fact and say "Corrected."
+
+Never save passwords, access tokens, payment details, private keys or one-time codes.
+`;
+
+  const NOTES_SKILL = `---
+description: "Save long material to your memory as a note: meeting notes, research, reference material, or a decision with its reasons. Use when someone shares something too long for one fact, or says write this down, document this, or take notes."
+---
+
+# Notes
+
+A note is a markdown file in your memory plus an index entry so it can be found later. Always do both steps.
+
+1. Pick a short kebab-case file name, one topic per note (\`meeting-notes-2026-11.md\`). Check \`arcana_brain_list({ source: "brain" })\` first; if a note on the topic exists, read it with \`arcana_brain_read\`, add your new section, and write the whole thing back.
+2. Write it with \`arcana_brain_write({ name, content })\`. Include dates. For a decision: Context, Decision, Reasons, Options considered. For a meeting: Who, Summary, Decisions, Next steps.
+3. Index it with \`arcana_brain_add({ content, title, type: "note", source_path: "brain/<name>" })\`. When you added to an existing note, index only the new section.
+4. Say what you saved and its title.
+
+For a single fact, use the remember skill instead.
 `;
 }

@@ -5,16 +5,26 @@
   "description": "A Kybernesis agent in Buzz, with long-term memory.",
   "discovery": {
     "category": "agents",
-    "tags": ["Agents", "Memory"]
+    "tags": [
+      "Agents",
+      "Memory"
+    ]
   },
   "host": {
-    "networkOrigins": ["https://mcp.arcana.kybernesis.ai"],
+    "networkOrigins": [
+      "https://buzz.kybernesis.ai",
+      "https://mcp.arcana.kybernesis.ai"
+    ],
     "files": true,
     "processes": [
       {
         "id": "write-file",
         "program": "sh",
-        "args": ["-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", "kybernesis-write"]
+        "args": [
+          "-c",
+          "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"",
+          "kybernesis-write"
+        ]
       }
     ]
   }
