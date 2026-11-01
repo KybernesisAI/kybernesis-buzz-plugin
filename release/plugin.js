@@ -87,6 +87,21 @@ const CSS = `
 .kyb .art img { width:120px; height:120px; image-rendering:pixelated; }
 .kyb .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .kyb .spread { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+.kyb .plans { display:grid; gap:16px; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); }
+.kyb .plan { background:var(--surface); border:1px solid var(--line); padding:22px; display:flex; flex-direction:column; gap:14px; }
+.kyb .plan.main { border-color:var(--em); box-shadow:0 0 0 1px var(--em) inset; }
+.kyb .plan.off { background:var(--sunk); }
+.kyb .plan.off h2, .kyb .plan.off .price, .kyb .plan.off li { color:var(--muted); }
+.kyb .plan .price { font-family:var(--mono); font-size:22px; color:var(--ink); line-height:1.2; }
+.kyb .plan .price small { font-size:12px; color:var(--ink3); }
+.kyb .plan ul { list-style:none; margin:0; padding:0; font-size:13px; color:var(--ink2); }
+.kyb .plan li { padding:5px 0 5px 18px; position:relative; border-top:1px solid var(--line); }
+.kyb .plan li:first-child { border-top:0; }
+.kyb .plan li::before { content:"+"; position:absolute; left:0; font-family:var(--mono); color:var(--em); }
+.kyb .plan.off li::before { color:var(--muted); }
+.kyb .plan .btn { justify-content:center; margin-top:auto; }
+.kyb .tag { align-self:flex-start; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; padding:3px 7px; border:1px solid var(--line2); color:var(--ink3); }
+.kyb .tag.em { border-color:var(--em); color:var(--em); }
 .kyb .fine { margin-top:28px; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
 `;
 
@@ -581,6 +596,50 @@ export function apply(ctx) {
     );
   }
 
+  function PlanCards({ onBuzz }) {
+    const [prices, setPrices] = useState({ setup: 497, monthly: 47 });
+    useEffect(() => {
+      billingStatus()
+        .then((st) => st && st.prices && setPrices(st.prices))
+        .catch(() => {});
+    }, []);
+    return h(
+      "div",
+      { className: "plans" },
+      h(
+        "div",
+        { className: "plan main" },
+        h("span", { className: "tag em" }, "Available now"),
+        h("div", null, h("h2", null, "Buzz agent"), h("p", { className: "small muted", style: { margin: "6px 0 0" } }, "Runs on your Mac inside Buzz, on your own Claude plan.")),
+        h("div", { className: "price" }, `$${prices.setup}`, h("small", null, ` setup, then $${prices.monthly}/month`)),
+        h(
+          "ul",
+          null,
+          h("li", null, "Its own memory that lasts"),
+          h("li", null, "Your Gmail, Calendar, Drive, Notion and Slack"),
+          h("li", null, "Pages, cards, routines and heads-ups"),
+          h("li", null, "Answers while Buzz is open"),
+        ),
+        h("button", { type: "button", className: "btn em big", onClick: onBuzz }, "Create a Buzz agent"),
+      ),
+      h(
+        "div",
+        { className: "plan off", "aria-disabled": "true" },
+        h("span", { className: "tag" }, "Coming soon"),
+        h("div", null, h("h2", null, "Remote Buzz agent"), h("p", { className: "small muted", style: { margin: "6px 0 0" } }, "Runs in the cloud, so it answers even when your Mac is off.")),
+        h("div", { className: "price" }, "Coming soon"),
+        h(
+          "ul",
+          null,
+          h("li", null, "Everything in a Buzz agent"),
+          h("li", null, "Always on, day and night"),
+          h("li", null, "Its own computer and browser"),
+        ),
+        h("button", { type: "button", className: "btn big", disabled: true }, "Coming soon"),
+      ),
+    );
+  }
+
   function CreateForm(props) {
     const [status, setStatus] = useState(null);
     const [problem, setProblem] = useState("");
@@ -951,7 +1010,6 @@ export function apply(ctx) {
               "div",
               { className: "acts" },
               h("button", { type: "button", className: "btn ghost", disabled: busyAccount, onClick: () => account("/account") }, busyAccount ? "Opening…" : "Account ↗"),
-              has && !adding && h("button", { type: "button", className: "btn", onClick: () => setAdding(true) }, "+ New agent"),
             ),
           ),
         ),
@@ -971,14 +1029,19 @@ export function apply(ctx) {
                     null,
                     !claude.ready &&
                       h("div", { className: "notice bad", style: { marginBottom: 16 } }, `Your agents can't answer until Claude is on in Buzz: ${claude.label}`),
-                    adding && h(React.Fragment, null, h(CreateForm, { first: false, claude, onCreated: created, onCancel: () => setAdding(false) }), h("div", { className: "gap" })),
                     h("div", { className: "title" }, agents.length === 1 ? "Your agent" : `Your agents · ${agents.length}`),
                     h(
                       "div",
                       { className: "grid" },
                       agents.map((a) => h(AgentCard, { key: a.folder, agent: a, round, onEdit: (agent) => account(agent.pubkey ? `/account/agents/${agent.pubkey}` : "/account") })),
                     ),
-                    h("div", { className: "fine" }, "Buzz must be open for your agents to answer · Free during early access"),
+                    h("div", { className: "gap" }),
+                    h("div", { className: "gap" }),
+                    h("div", { className: "title" }, "Add an agent"),
+                    adding
+                      ? h(CreateForm, { first: false, claude, onCreated: created, onCancel: () => setAdding(false) })
+                      : h(PlanCards, { onBuzz: () => setAdding(true) }),
+                    h("div", { className: "fine" }, "A Buzz agent answers while Buzz is open on your Mac"),
                   ),
           ),
         ),
