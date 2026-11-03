@@ -10,7 +10,7 @@ The agent runs on Claude, so Claude must be on in Buzz: Settings → Agent setup
 
 ## The page
 
-Before the first agent: a guided setup (Claude check, name, role, what it helps with, Create). After that: the person's agents as cards (running in Buzz, memory on), a small New agent button in the corner, and Account, which opens buzz.kybernesis.ai already signed in (a one-time link). Its sidebar icon is the robot (a data-URL `icon` on the page); `release/icon.png` and `release/README.md` are what Buzz shows on the plugin's own page.
+Before the first agent: a guided setup (Claude check, name, role, what it helps with, Create). After that: the person's agents as cards (running in Buzz, memory on), a small New agent button in the corner, and Account, which opens buzz.kybernesis.ai already signed in (a one-time link). Its sidebar icon is the bare Kybernesis K (a data-URL `icon` on the page, Graphite, Paper in dark mode); `release/icon.png` and `release/README.md` are what Buzz shows on the plugin's own page.
 
 Each time the page opens it signs in with the Buzz key (one replaceable kind 30315 event, never shown), then syncs with the account: agents the site doesn't know are registered, edits made on the site (name, role, focus, picture) are written into the agent's folder and its Buzz profile, and every folder gets the current memory key.
 
