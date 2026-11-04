@@ -119,6 +119,7 @@ const CSS = `
 .kyb .plan.off li strong { color:var(--muted); }
 .kyb .tag { align-self:flex-start; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; padding:3px 7px; border:1px solid var(--line2); color:var(--ink3); }
 .kyb .tag.em { border-color:var(--em); color:var(--em); }
+.kyb .foot .tag { flex:none; white-space:nowrap; align-self:center; }
 .kyb .fine { margin-top:28px; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
 `;
 
@@ -546,6 +547,150 @@ export function apply(ctx) {
     return next;
   }
 
+  // ── This Mac and the person's other Macs ─────────────────────────────
+  //
+  // Agents run on the Mac that made them. Every Mac with this plugin sends a
+  // heartbeat to the account: which Mac it is (an id derived from its
+  // hardware, never the hardware id itself, and a label such as "M4 Mac
+  // mini") and which agents it holds, running or not. The answer lists every
+  // agent on the account with the Mac it lives on, so each Mac shows the
+  // others' agents too, read-only, with whether they are on.
+
+  const BEAT_EVERY_MS = 2 * 60 * 1000;
+  let mac = null;
+
+  const hexOf = (bytes) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  async function thisMac() {
+    if (mac) return mac;
+    let hardware = {};
+    let computerName = "";
+    try {
+      const out = await ctx.host.runCommand("this-mac");
+      if (out) {
+        const [profile, name] = out.split("@@kybernesis@@");
+        try {
+          hardware = (JSON.parse(profile).SPHardwareDataType || [])[0] || {};
+        } catch {
+          hardware = {};
+        }
+        computerName = (name || "").trim().slice(0, 60);
+      }
+    } catch (error) {
+      console.warn(`[kybernesis] couldn't read this Mac's name: ${errorText(error)}`);
+    }
+    const chip = String(hardware.chip_type || "").replace(/^Apple\s+/, "").trim();
+    const model = String(hardware.machine_name || "").trim();
+    const label = [chip, model].filter(Boolean).join(" ") || computerName || "Mac";
+    let id;
+    if (hardware.platform_UUID) {
+      id = hexOf(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`kybernesis-device:${hardware.platform_UUID}`)));
+    } else {
+      // No hardware id: a random one kept on this Mac.
+      const path = `${await homeDir()}/device.json`;
+      try {
+        id = JSON.parse(await readText(path)).id;
+      } catch {
+        id = "";
+      }
+      if (!/^[0-9a-f]{64}$/.test(id || "")) {
+        id = hexOf(crypto.getRandomValues(new Uint8Array(32)));
+        await writeFile(path, JSON.stringify({ id }) + "\n").catch(() => {});
+      }
+    }
+    mac = { id, label, computerName };
+    return mac;
+  }
+
+  let fleet = { device: null, agents: [], deleted: [] };
+  const fleetListeners = new Set();
+  let localPubkeys = [];
+  let lastBeatKey = "";
+  let beating = null;
+
+  function runningKey() {
+    return localPubkeys.map((pk) => `${pk}:${isRunning(pk) ? 1 : 0}`).join(",");
+  }
+
+  function beat() {
+    if (!beating) beating = doBeat().finally(() => (beating = null));
+    return beating;
+  }
+
+  async function doBeat() {
+    if (ctx.relay.snapshot().status !== "ready") return fleet;
+    const device = await thisMac();
+    localPubkeys = (await loadAgents()).map((a) => a.pubkey).filter(Boolean);
+    const s = await signIn();
+    const res = await call("/api/devices", {
+      token: s.token,
+      body: { device, agents: localPubkeys.map((pk) => ({ id: pk, running: isRunning(pk) })) },
+    });
+    lastBeatKey = runningKey();
+    if (res.status !== 200) return fleet;
+    fleet = { device: res.json.device || device.id, agents: res.json.agents || [], deleted: res.json.deleted || [] };
+    for (const listener of fleetListeners) listener();
+    return fleet;
+  }
+
+  // The person's agents that live on another Mac.
+  function otherMacAgents(local) {
+    const here = new Set(local.map((a) => a.pubkey).filter(Boolean));
+    const deleted = new Set(fleet.deleted);
+    return fleet.agents.filter((a) => !here.has(a.id) && !deleted.has(a.id) && !(a.device && a.device.id === fleet.device));
+  }
+
+  // What to call a Mac: its label, or its own name when two Macs share a label.
+  function macName(device) {
+    if (!device) return "another Mac";
+    const twin = fleet.agents.some((a) => a.device && a.device.id !== device.id && a.device.label === device.label);
+    return (twin && device.computerName) || device.label;
+  }
+
+  function ago(iso) {
+    const minutes = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    if (!Number.isFinite(minutes) || minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) return `${hours} h ago`;
+    return `${Math.round(hours / 24)} days ago`;
+  }
+
+  // Only Macs that hold agents beat in the background; one with none beats
+  // while the Kybernesis page is open, to read the other Macs' agents.
+  const backgroundBeat = async () => {
+    try {
+      if ((await loadAgents()).some((a) => a.pubkey)) await beat();
+    } catch (error) {
+      console.warn(`[kybernesis] heartbeat: ${errorText(error)}`);
+    }
+  };
+  setTimeout(backgroundBeat, 8 * 1000);
+  setInterval(backgroundBeat, BEAT_EVERY_MS);
+  // An agent starting or stopping here is told to the other Macs within seconds.
+  let beatSoon = null;
+  try {
+    ctx.agents.subscribe(() => {
+      if (!localPubkeys.length || beatSoon || runningKey() === lastBeatKey) return;
+      beatSoon = setTimeout(() => {
+        beatSoon = null;
+        backgroundBeat();
+      }, 5 * 1000);
+    });
+  } catch {
+    // An older Buzz without agent updates; the regular heartbeat still runs.
+  }
+
+  function useFleet() {
+    const [, setTick] = useState(0);
+    useEffect(() => {
+      const listener = () => setTick((n) => n + 1);
+      fleetListeners.add(listener);
+      return () => fleetListeners.delete(listener);
+    }, []);
+    return fleet;
+  }
+
   // ── Page ─────────────────────────────────────────────────────────────
 
   function useBuzzAgents() {
@@ -763,7 +908,7 @@ export function apply(ctx) {
 
   // `round` changes once the account sync has rewritten the memory key, so the
   // check never reads a key the sync is about to replace.
-  function AgentCard({ agent, round, onEdit, onDeleted }) {
+  function AgentCard({ agent, round, here, onEdit, onDeleted }) {
     const [memory, setMemory] = useState("checking");
     const [asking, setAsking] = useState(false);
     const [deleting, setDeleting] = useState(false);
@@ -812,6 +957,7 @@ export function apply(ctx) {
         "div",
         { className: "foot" },
         h("div", { className: "sts" }, h("span", { className: `st ${run[0]}` }, run[1]), h("span", { className: `st ${mem[0]}` }, mem[1])),
+        here ? h("span", { className: "tag" }, "On this Mac") : null,
       ),
       asking &&
         h(
@@ -826,6 +972,39 @@ export function apply(ctx) {
           ),
           problem && h("div", { className: "notice bad", style: { marginTop: 10 } }, problem),
         ),
+    );
+  }
+
+  // An agent that lives on another of the person's Macs: shown, not run here.
+  // Edits go through the account, and its own Mac applies them.
+  function RemoteCard({ agent, onEdit }) {
+    const d = agent.device;
+    const where = macName(d);
+    const run = !d
+      ? ["", "Not seen yet"]
+      : !d.online
+        ? ["", `Offline · ${ago(d.seenAt)}`]
+        : agent.running
+          ? ["ok", "Running"]
+          : ["warn", "Stopped"];
+    const focus = agent.focus && agent.focus.length > 120 ? `${agent.focus.slice(0, 120)}…` : agent.focus;
+    return h(
+      "div",
+      { className: "card remote" },
+      h(
+        "div",
+        { className: "who" },
+        h("img", { className: "avatar", src: agent.picture || AVATAR, alt: "" }),
+        h("div", { style: { minWidth: 0, flex: 1 } }, h("h2", null, agent.name), h("div", { className: "role" }, agent.role || "Kybernesis agent")),
+        h("div", { className: "card-acts" }, h("button", { type: "button", className: "link", onClick: () => onEdit(agent) }, "Edit ↗")),
+      ),
+      focus ? h("p", { className: "focus" }, focus) : null,
+      h(
+        "div",
+        { className: "foot" },
+        h("div", { className: "sts" }, h("span", { className: `st ${run[0]}` }, run[1])),
+        h("span", { className: "tag", title: d && d.computerName ? d.computerName : undefined }, d ? `On ${where}` : "On another Mac"),
+      ),
     );
   }
 
@@ -1033,6 +1212,7 @@ export function apply(ctx) {
     icon: ICON,
     component: function Home() {
       useBuzzAgents();
+      useFleet();
       const [claude, setClaude] = useState(() => claudeStatus());
       const [agents, setAgents] = useState(null);
       const [adding, setAdding] = useState(false);
@@ -1047,6 +1227,14 @@ export function apply(ctx) {
         setAgents(list);
         return list;
       };
+
+      // The other Macs' agents: read when the page opens and every minute while it is open.
+      useEffect(() => {
+        const read = () => beat().catch((error) => console.warn(`[kybernesis] heartbeat: ${errorText(error)}`));
+        read();
+        const timer = setInterval(read, 60 * 1000);
+        return () => clearInterval(timer);
+      }, []);
 
       useEffect(() => {
         refresh().then((list) => {
@@ -1080,7 +1268,27 @@ export function apply(ctx) {
         refresh().then(() => setRound((n) => n + 1)); // create already wrote the current key
       };
 
-      const has = agents && agents.length > 0;
+      const local = agents || [];
+      const remote = agents ? otherMacAgents(local) : [];
+      const has = local.length > 0 || remote.length > 0;
+      const editAgent = (agent) => account(agent.pubkey || agent.id ? `/account/agents/${agent.pubkey || agent.id}` : "/account");
+      const localGrid = h(
+        "div",
+        { className: "grid" },
+        local.map((a) =>
+          h(AgentCard, {
+            key: a.folder,
+            agent: a,
+            round,
+            here: remote.length > 0,
+            onEdit: editAgent,
+            onDeleted: (agent, list) => {
+              setAgents(list);
+              setNote({ kind: "", text: `${agent.name} is deleted, with its memory, pages and plan.` });
+            },
+          }),
+        ),
+      );
       return h(
         "div",
         { className: "kyb" },
@@ -1113,25 +1321,21 @@ export function apply(ctx) {
                 : h(
                     React.Fragment,
                     null,
-                    !claude.ready &&
+                    local.length > 0 &&
+                      !claude.ready &&
                       h("div", { className: "notice bad", style: { marginBottom: 16 } }, `Your agents can't answer until Claude is on in Buzz: ${claude.label}`),
-                    h("div", { className: "title" }, agents.length === 1 ? "Your agent" : `Your agents · ${agents.length}`),
-                    h(
-                      "div",
-                      { className: "grid" },
-                      agents.map((a) =>
-                        h(AgentCard, {
-                          key: a.folder,
-                          agent: a,
-                          round,
-                          onEdit: (agent) => account(agent.pubkey ? `/account/agents/${agent.pubkey}` : "/account"),
-                          onDeleted: (agent, list) => {
-                            setAgents(list);
-                            setNote({ kind: "", text: `${agent.name} is deleted, with its memory, pages and plan.` });
-                          },
-                        }),
-                      ),
-                    ),
+                    !remote.length
+                      ? h(React.Fragment, null, h("div", { className: "title" }, local.length === 1 ? "Your agent" : `Your agents · ${local.length}`), localGrid)
+                      : h(
+                          React.Fragment,
+                          null,
+                          local.length > 0 && h("div", { className: "title" }, `On this Mac · ${local.length}`),
+                          local.length > 0 && localGrid,
+                          local.length > 0 && h("div", { className: "gap" }),
+                          h("div", { className: "title" }, `On your other Macs · ${remote.length}`),
+                          h("div", { className: "grid" }, remote.map((a) => h(RemoteCard, { key: a.id, agent: a, onEdit: editAgent }))),
+                          h("p", { className: "small muted", style: { margin: "10px 0 0" } }, "Agents answer from the Mac they live on, while Buzz is open there."),
+                        ),
                     h("div", { className: "gap" }),
                     h("div", { className: "gap" }),
                     h("div", { className: "title" }, "Add an agent"),

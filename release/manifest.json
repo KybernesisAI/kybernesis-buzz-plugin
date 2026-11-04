@@ -11,6 +11,16 @@
     ]
   },
   "host": {
+    "commands": [
+      {
+        "id": "this-mac",
+        "program": "sh",
+        "args": [
+          "-c",
+          "/usr/sbin/system_profiler -json SPHardwareDataType 2>/dev/null; echo; echo @@kybernesis@@; /usr/sbin/scutil --get ComputerName 2>/dev/null"
+        ]
+      }
+    ],
     "networkOrigins": [
       "https://buzz.kybernesis.ai",
       "https://mcp.arcana.kybernesis.ai"
