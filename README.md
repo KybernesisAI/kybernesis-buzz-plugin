@@ -22,4 +22,6 @@ Each time the page opens it signs in with the Buzz key (one replaceable kind 303
 4. Checks the memory answers with that key.
 5. Creates the Buzz Claude agent working in that folder, with the robot picture, and registers it with the account.
 
+Agents from the person's other Macs show below their own, read-only, with the Mac they live on and whether they are running. Every Mac with the plugin sends a heartbeat (`POST /api/devices`) every two minutes, and within seconds of an agent starting or stopping: an id derived from the Mac's hardware UUID (hashed, never sent as is), a label such as "M4 Mac mini" from `system_profiler`, the Mac's name, and the agents it holds. A Mac with no agents sends one only while the page is open. A Mac counts as offline after six minutes without one. Reading the Mac's model is the `this-mac` command in the manifest, so this update asks for that access once.
+
 `~/Kybernesis/agents.json` lists the agents made on this Mac. The page shows each one with whether its memory is working.
